@@ -19,7 +19,7 @@ export function getGraphData(graph: Graph) {
     }; 
 }
 
-export async function fetchData() : Promise<Graph> {
+export async function fetchData(loadCallback: (start: boolean) => void) : Promise<Graph> {
     const selected = await open({
         multiple: false,
         filters: [
@@ -30,15 +30,19 @@ export async function fetchData() : Promise<Graph> {
     if (!selected || Array.isArray(selected)) {
         throw new Error("Multiple selection / no selection applied!");
     }
+    
+    loadCallback(true);        
 
     try {
-        const result = await invoke<Graph>("process_vtk_file", {
+        const result = await invoke<Graph>("process_vtk_file_async", {
         path: selected
         });
 
         return result;
     } catch (err) {
         console.error(err);
+    } finally {
+        loadCallback(false);
     }
 
     throw new Error("Failed to fetch graph data!");

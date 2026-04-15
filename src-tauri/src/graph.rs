@@ -21,15 +21,15 @@ pub struct Graph {
     edges: Vec<Edge>,
 }
 
-#[tauri::command]
-pub fn process_vtk_file(path: String) -> Result<Graph, String> {
-    // 1. Read file
+fn process_vtk_file(path: String) -> Result<Graph, String> {
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
 
-    // 2. TODO: Replace this with actual VTK parsing + extremum graph logic
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    
+    // TODO: Replace this with actual VTK parsing + extremum graph logic
     println!("Processing VTK file with size: {}", content.len());
-
+ 
     // Dummy graph for now
     let nodes = if path.ends_with("bonsai.vtk") {
         vec![
@@ -52,4 +52,12 @@ pub fn process_vtk_file(path: String) -> Result<Graph, String> {
     ];
 
     Ok(Graph { nodes, edges })
+}
+
+#[tauri::command]
+pub async fn process_vtk_file_async(path: String) -> Result<Graph, String> {
+    tokio::task::spawn_blocking(move || {
+        process_vtk_file(path)
+    })
+    .await.expect("Unexpected tokio error!!")
 }

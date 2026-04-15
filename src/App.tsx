@@ -8,7 +8,8 @@ import ForceGraph3D from "react-force-graph-3d";
 export default function App() {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
-  
+  const [loading, setLoading] = useState(false);
+
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -40,7 +41,12 @@ export default function App() {
     return getGraphData(graph);
   }, [graph]);
 
+  const isValidClick = () => {
+    return !loading
+  };
+
   const handleRecenter = () => {
+    if (!isValidClick()) return;
     if (graphRef && graphRef.current) {
       // Set camera's origin, lookAt and up vectors
       graphRef.current.cameraPosition(
@@ -53,8 +59,9 @@ export default function App() {
   };
 
   const handleOpenFile = async () => {
+    if (!isValidClick()) return;
     try {
-      let result = await fetchData();
+      let result = await fetchData(setLoading);
       setGraph(result);
     }
     catch (err) {
@@ -70,13 +77,7 @@ export default function App() {
   }, [graph, dimensions]);
 
   return (
-    <div style={{ 
-      display: "flex", 
-      flexDirection: "column",
-      height: "100vh",
-      width: "100vw", 
-      overflow: "hidden"
-    }}>
+    <div className="main-container">
       <div className="navbar">
         <button onClick={handleOpenFile}>
           <img src={file_open_img} alt="Open File"></img>
@@ -86,7 +87,13 @@ export default function App() {
         </button>
       </div>
 
-      {graph && (
+      {loading && (
+        <div className="overlay">
+          <div className="spinner" />
+        </div>
+      )} 
+
+      {!loading && graph && (
         <div className="container" ref={containerRef}>
           {dimensions.width > 0 && dimensions.height > 0 && (
             <ForceGraph3D
