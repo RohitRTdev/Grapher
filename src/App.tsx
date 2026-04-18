@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import type {Graph} from './Types.tsx'
-import { getGraphData, fetchData } from "./UI.tsx";
+import type {Graph} from './Types.ts'
+import { getGraphData, fetchData } from "./UI.ts";
 import file_open_img from './assets/file-open.png';
 import reset_img from './assets/reset.png';
 import ForceGraph3D from "react-force-graph-3d";
@@ -103,8 +103,7 @@ export default function App() {
               width={dimensions.width}
               height={dimensions.height}
               graphData={formattedGraphData}
-              nodeColor={node => node.color}
-              nodeLabel={node => node.name}
+              nodeColor={node => {if (node.colorCode == 0) return "red"; else return "blue";}}
             />
           )}
           <div className="overlay-text">Maximum graph</div>

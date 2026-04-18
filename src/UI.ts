@@ -1,11 +1,10 @@
-import { Graph } from "./Types.tsx";
+import { Graph } from "./Types.ts";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
 export function getGraphData(graph: Graph) {
     return {
       nodes: graph.nodes.map(e => ({
-        name: e.name,
         id: e.id,
         color: "blue",
         fx: e.x * 100, 

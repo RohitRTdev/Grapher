@@ -1,6 +1,6 @@
 type Node = {
   id: number;
-  name: string;
+  colorCode: number;
   x: number;
   y: number;
   z: number;
