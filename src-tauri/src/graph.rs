@@ -47,7 +47,7 @@ impl<'a> Vertex<'a> {
         let mut dim_prod = 1;
         for idx in (0..dims.len()).rev() {
             data_idx += iv[idx] * dim_prod;
-            dim_prod *= dims[idx]; 
+            dim_prod *= dims[dims.len() - idx - 1]; 
         }
 
         data_idx
@@ -88,7 +88,6 @@ impl<'a> Vertex<'a> {
         || diff.iter().all(|&x| x == 0 || x == -1) 
     }
 
-    // TODO: Generalize to n dims
     fn get_vertex(&self) -> Vec<f64> {
         let mut vertex = vec![0f64; self.iv.len()];
         for dim in 0..self.iv.len() {
@@ -235,18 +234,18 @@ impl<'a> ExtGraph<'a> {
 
     fn is_boundary_point(&self, iv: &Vec<usize>) -> bool {
         for dim in 0..iv.len() {
-            if iv[dim] == 0 || iv[dim] == self.volume.dims[dim] - 1 {
+            if iv[dim] == 0 || iv[dim] == self.volume.dims[self.volume.dims.len() - dim - 1] - 1 {
                 return true;
             }
         }
 
-        return false
+        false
     }
 
     fn update_iv(&self, iv: &mut Vec<usize>) {
         for dim in (0..self.volume.dims.len()).rev() {
             iv[dim] += 1;
-            if iv[dim] >= self.volume.dims[dim] {
+            if iv[dim] >= self.volume.dims[self.volume.dims.len() - dim - 1] {
                 iv[dim] = 0;
             }
             else {
