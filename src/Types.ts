@@ -1,6 +1,7 @@
 type Node = {
   id: number;
-  colorCode: number;
+  color_code: number;
+  fn_val: number;
   x: number;
   y: number;
   z: number;

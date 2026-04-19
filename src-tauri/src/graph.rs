@@ -6,6 +6,7 @@ use std::collections::HashMap;
 pub struct Node {
     id: usize,
     color_code: u8,
+    fn_val: f64,
     x: f64,
     y: f64,
     z: f64
@@ -37,7 +38,7 @@ struct Vertex<'a> {
     id: usize, 
     iv: Vec<usize>,
     dims: &'a Vec<usize>,
-    spacing: &'a (f64, f64, f64)
+    spacing: &'a Vec<f64>
 }
 
 impl<'a> Vertex<'a> {
@@ -52,7 +53,7 @@ impl<'a> Vertex<'a> {
         data_idx
     }
 
-    fn new(iv: Vec<usize>, id: usize, dims: &'a Vec<usize>, spacing: &'a (f64, f64, f64)) -> Self {
+    fn new(iv: Vec<usize>, id: usize, dims: &'a Vec<usize>, spacing: &'a Vec<f64>) -> Self {
         Vertex {
             iv,
             id,
@@ -88,8 +89,13 @@ impl<'a> Vertex<'a> {
     }
 
     // TODO: Generalize to n dims
-    fn get_vertex(&self) -> (f64, f64, f64) {
-        (self.spacing.0 * self.iv[2] as f64, self.spacing.1 * self.iv[1] as f64, self.spacing.2 * self.iv[0] as f64)
+    fn get_vertex(&self) -> Vec<f64> {
+        let mut vertex = vec![0f64; self.iv.len()];
+        for dim in 0..self.iv.len() {
+            vertex[dim] = self.spacing[dim] * self.iv[self.iv.len() - dim - 1] as f64;
+        }
+
+        vertex
     }
 }
 
@@ -131,36 +137,46 @@ impl<'a> ExtGraph<'a> {
         let mut highest_vertex_id = 0;
 
         let mut new_id = 0;
+        println!("Processing vertex: {:?}", cur);
         for neighbor in &self.neighbor_idx_set {
             let nv = Vertex::get_neighbor(cur, &neighbor);
             let fnv = self.volume.data[nv.id];
+            
 
             // We only care about the upper link
             if fnv > fv {
                 // Keep track of the highest neighbor
-                if fnv < highest_vertex_val {
+                if fnv >= highest_vertex_val {
                     highest_vertex_val = fnv;
                     highest_vertex_id = nv.id;
                 }
 
                 // Find which component in the upper link this vertex belongs to and insert it there
-                let mut found = None;
-                'outer: for (comp_id, vertices) in &upper_link {
+                let mut found = vec![];
+                for (comp_id, vertices) in &upper_link {
                     for vert in vertices {
                         if vert.is_neighbor(&nv) {
-                            found = Some(*comp_id);
-                            break 'outer;
+                            found.push(*comp_id);
+                            break;
                         }        
                     }
                 }
 
-                if let Some(id) = found {
-                    upper_link.get_mut(&id).unwrap().push(nv);
-                }
                 // If no such component, create new one
+                if found.len() == 0 {
+                    println!("Added new component neighbor {} for {:?}", fnv, nv);
+                    upper_link.insert(new_id, vec![nv]);
+                    new_id += 1; 
+                }
                 else {
-                   upper_link.insert(new_id, vec![nv]);
-                   new_id += 1; 
+                    let mut first_comp = upper_link.remove(&found[0]).unwrap();
+                    for comp in found.iter().skip(1) {
+                        println!("Merging component {} to comp {}", comp, found[0]);
+                        first_comp.extend(upper_link.remove(&comp).unwrap())
+                    }
+                    println!("Assimilating neighbor {:?} with comp", nv);
+                    first_comp.push(nv);
+                    upper_link.insert(found[0], first_comp);
                 }
             }
         }
@@ -195,12 +211,19 @@ impl<'a> ExtGraph<'a> {
         match &pt_type {
             CriticalPointType::Saddle(_) | CriticalPointType::Maxima => {
                 let vertex = cur.get_vertex();
+                let z = if vertex.len() == 2 {
+                    0f64
+                }
+                else {
+                    vertex[2]
+                };
                 let node = Node {
                     id: cur.id,
                     color_code,
-                    x: vertex.0,
-                    y: vertex.1,
-                    z: vertex.2 
+                    fn_val: fv,
+                    x: vertex[0],
+                    y: vertex[1],
+                    z 
                 };
                 
                 self.graph.nodes.push(node);
@@ -265,7 +288,7 @@ impl<'a> ExtGraph<'a> {
         
         let mut iv = vec![0; num_dims];
 
-        for point in 0..self.volume.data.len() / 100 {
+        for point in 0..self.volume.data.len() {
             if self.is_boundary_point(&iv) {
                 self.update_iv(&mut iv);
                 continue;
@@ -281,18 +304,29 @@ impl<'a> ExtGraph<'a> {
     }
 }
 
+fn get_total_maxima(graph: &Graph) -> usize {
+    let mut maxima = 0;
+    for pt in &graph.nodes {
+        if pt.color_code == 0 {
+            maxima += 1;
+        }
+    }
+
+    maxima    
+}
+
 
 fn process_vtk_file(path: String) -> Result<Graph, String> {
     let volume = read_vtk(&path)?;
     
-    println!("VTK contents:\nOrigin:{:?}\nSpacing:{:?}\nDimensions:{:?}\nFirst 3 points: {} {} {}",
-            volume.origin, volume.spacing, volume.dims, volume.data[0], volume.data[1], volume.data[2]);
+    println!("VTK contents:\nSpacing:{:?}\nDimensions:{:?}\nFirst 3 points: {} {} {}",
+            volume.spacing, volume.dims, volume.data[0], volume.data[1], volume.data[2]);
 
 
     let mut graph = ExtGraph::new(&volume);
     graph.compute();
 
-    println!("There are total: {} points and {} critical points!", volume.data.len() / 100, graph.graph.nodes.len());
+    println!("There are total: {} points and {} maxima!", volume.data.len(), get_total_maxima(&graph.graph));
 
     Ok(graph.graph)
 }

@@ -4,8 +4,7 @@ use std::io::{BufRead, BufReader};
 #[derive(Debug)]
 pub struct VtkVolume {
     pub dims: Vec<usize>,
-    pub spacing: (f64, f64, f64),
-    pub origin: (f64, f64, f64),
+    pub spacing: Vec<f64>,
     pub data: Vec<f64>,
 }
 
@@ -17,7 +16,6 @@ pub fn read_vtk(path: &String) -> Result<VtkVolume, String> {
 
     let mut dims = None;
     let mut spacing = None;
-    let mut origin = None;
 
     let mut lines = reader.lines();
 
@@ -25,30 +23,15 @@ pub fn read_vtk(path: &String) -> Result<VtkVolume, String> {
         let line = line.trim();
 
         if line.starts_with("DIMENSIONS") {
-            let parts: Vec<_> = line.split_whitespace().collect();
-            dims = Some([
-                parts[1].parse().unwrap(),
-                parts[2].parse().unwrap(),
-                parts[3].parse().unwrap(),
-            ]);
+            dims = Some(line.split_whitespace().skip(1).map(|part| {
+                part.parse().unwrap()
+            }).collect());
         }
 
         if line.starts_with("SPACING") {
-            let parts: Vec<_> = line.split_whitespace().collect();
-            spacing = Some((
-                parts[1].parse().unwrap(),
-                parts[2].parse().unwrap(),
-                parts[3].parse().unwrap(),
-            ));
-        }
-
-        if line.starts_with("ORIGIN") {
-            let parts: Vec<_> = line.split_whitespace().collect();
-            origin = Some((
-                parts[1].parse().unwrap(),
-                parts[2].parse().unwrap(),
-                parts[3].parse().unwrap(),
-            ));
+            spacing = Some(line.split_whitespace().skip(1).map(|part| {
+                part.parse().unwrap()
+            }).collect());
         }
 
         if line.starts_with("FIELD") {
@@ -56,9 +39,8 @@ pub fn read_vtk(path: &String) -> Result<VtkVolume, String> {
         }
     }
 
-    let [nx, ny, nz] = dims.ok_or("Missing DIMENSIONS")?;
+    let dims = dims.ok_or("Missing dimensions")?;
     let spacing = spacing.ok_or("Missing SPACING")?;
-    let origin = origin.ok_or("Missing ORIGIN")?;
 
     let mut total_points = 0usize;
 
@@ -94,9 +76,8 @@ pub fn read_vtk(path: &String) -> Result<VtkVolume, String> {
     }
 
     Ok(VtkVolume {
-        dims: vec![nx, ny, nz],
+        dims,
         spacing,
-        origin,
-        data,
+        data
     })
 }

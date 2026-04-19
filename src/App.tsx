@@ -103,7 +103,8 @@ export default function App() {
               width={dimensions.width}
               height={dimensions.height}
               graphData={formattedGraphData}
-              nodeColor={node => {if (node.colorCode == 0) return "red"; else return "blue";}}
+              nodeLabel={node => node.fnVal.toString()}
+              nodeColor={node => {if (node.color == 0) return "red"; else return "blue";}}
             />
           )}
           <div className="overlay-text">Maximum graph</div>

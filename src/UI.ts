@@ -3,10 +3,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
 export function getGraphData(graph: Graph) {
+    console.log(graph);
     return {
       nodes: graph.nodes.map(e => ({
         id: e.id,
-        color: "blue",
+        color: e.color_code,
+        fnVal: e.fn_val,
         fx: e.x * 100, 
         fy: e.y * 100,
         fz: e.z * 100
