@@ -50,7 +50,7 @@ export default function App() {
     if (graphRef && graphRef.current) {
       // Set camera's origin, lookAt and up vectors
       graphRef.current.cameraPosition(
-        { x: 0, y: 0, z: 400 }, 
+        { x: 0, y: 0, z: 40 }, 
         { x: 0, y: 0, z: 0 }               
       );
 

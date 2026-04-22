@@ -1,6 +1,6 @@
 use serde::{Serialize};
 use crate::vtk::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Serialize)]
 pub struct Node {
@@ -91,7 +91,9 @@ impl<'a> Vertex<'a> {
     fn get_vertex(&self) -> Vec<f64> {
         let mut vertex = vec![0f64; self.iv.len()];
         for dim in 0..self.iv.len() {
-            vertex[dim] = self.spacing[dim] * self.iv[self.iv.len() - dim - 1] as f64;
+            vertex[dim] = self.spacing[dim] * self.iv[self.iv.len() - dim - 1] as f64 
+            // Translate the structure to bring it to center of camera
+            - ((self.dims[dim] as f64) / 2.0);
         }
 
         vertex
@@ -99,7 +101,7 @@ impl<'a> Vertex<'a> {
 }
 
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 enum CriticalPointType {
     Saddle(Vec<usize>),
     Other(usize),
@@ -136,12 +138,10 @@ impl<'a> ExtGraph<'a> {
         let mut highest_vertex_id = 0;
 
         let mut new_id = 0;
-        println!("Processing vertex: {:?}", cur);
         for neighbor in &self.neighbor_idx_set {
             let nv = Vertex::get_neighbor(cur, &neighbor);
             let fnv = self.volume.data[nv.id];
             
-
             // We only care about the upper link
             if fnv > fv {
                 // Keep track of the highest neighbor
@@ -163,17 +163,14 @@ impl<'a> ExtGraph<'a> {
 
                 // If no such component, create new one
                 if found.len() == 0 {
-                    println!("Added new component neighbor {} for {:?}", fnv, nv);
                     upper_link.insert(new_id, vec![nv]);
                     new_id += 1; 
                 }
                 else {
                     let mut first_comp = upper_link.remove(&found[0]).unwrap();
                     for comp in found.iter().skip(1) {
-                        println!("Merging component {} to comp {}", comp, found[0]);
                         first_comp.extend(upper_link.remove(&comp).unwrap())
                     }
-                    println!("Assimilating neighbor {:?} with comp", nv);
                     first_comp.push(nv);
                     upper_link.insert(found[0], first_comp);
                 }
@@ -210,12 +207,15 @@ impl<'a> ExtGraph<'a> {
         match &pt_type {
             CriticalPointType::Saddle(_) | CriticalPointType::Maxima => {
                 let vertex = cur.get_vertex();
+                
+                // If 2d case, then just augment 3rd dimension as 0
                 let z = if vertex.len() == 2 {
                     0f64
                 }
                 else {
                     vertex[2]
                 };
+
                 let node = Node {
                     id: cur.id,
                     color_code,
@@ -242,14 +242,84 @@ impl<'a> ExtGraph<'a> {
         false
     }
 
-    fn update_iv(&self, iv: &mut Vec<usize>) {
+    // Updates the loop index and tells whether iteration must continue
+    fn update_iv(&self, iv: &mut Vec<usize>) -> bool {
         for dim in (0..self.volume.dims.len()).rev() {
             iv[dim] += 1;
             if iv[dim] >= self.volume.dims[self.volume.dims.len() - dim - 1] {
+                // We have iterated over all points
+                if dim == 0 {
+                    return false;
+                }
                 iv[dim] = 0;
             }
             else {
                 break;
+            }
+        }
+
+        return true
+    }
+
+    // Follow the gradient until we hit a maxima or boundary
+    // Here, we will do an iterative approach
+    fn path_traverse(&self, gradients: &Vec<usize>) -> HashSet<usize> {
+        let mut reachable_maxima = HashSet::new();
+        let mut work_queue = VecDeque::new();
+        gradients.iter().for_each(|&item| {
+            work_queue.push_back(item);
+        });
+
+        while !work_queue.is_empty() {
+            let cur = work_queue.pop_front().unwrap();
+            if let Some(vertex) = self.cache.get(&cur) {
+                match vertex {
+                    CriticalPointType::Maxima => {
+                        // We have reached a maxima, stop traversal along this path
+                        reachable_maxima.insert(cur);
+                    },
+                    /* Ideally, we must not hit a saddle since we're traversing from d-1 saddles */
+                    /* However, I'm still keeping this here for safety */
+                    CriticalPointType::Saddle(vertices) => {
+                        // A saddle or other point indicates that we need to continue exploring this path
+                        // Add new neighbors to work list
+                        vertices.iter().for_each(|&item| {
+                            work_queue.push_back(item);
+                        });
+
+                        println!("Hit a saddle during traversal {:?}", vertex);
+                    },
+                    CriticalPointType::Other(highest_vertex) => {
+                        work_queue.push_back(*highest_vertex);
+                    }
+                }
+            }
+            else {
+                // The vertex info not stored in cache indicates that this is a boundary point
+                // Do nothing in this case
+            }
+        }
+
+
+        reachable_maxima
+    }
+
+    fn gradient_ascent(&mut self) {
+        for (&vertex_id, vertex_type) in &self.cache {
+            match vertex_type {
+                CriticalPointType::Saddle(gradients) => {
+                    println!("Processing saddle id: {} and type={:?}", vertex_id, vertex_type);
+                    let targets = self.path_traverse(gradients);
+
+                    targets.iter().for_each(|&target| {
+                        // Add an edge from this saddle to every maxima reachable from this saddle
+                        self.graph.edges.push(Edge {
+                            source: vertex_id,
+                            target
+                        })
+                    })
+                },
+                _ => {}
             }
         }
     }
@@ -287,9 +357,11 @@ impl<'a> ExtGraph<'a> {
         
         let mut iv = vec![0; num_dims];
 
-        for point in 0..self.volume.data.len() {
+        // 1st pass: Point classification
+        let mut do_work = true;
+        while do_work {
             if self.is_boundary_point(&iv) {
-                self.update_iv(&mut iv);
+                do_work = self.update_iv(&mut iv);
                 continue;
             }
 
@@ -298,8 +370,11 @@ impl<'a> ExtGraph<'a> {
 
             self.classify_point(&cur);
 
-            self.update_iv(&mut iv);
+            do_work = self.update_iv(&mut iv);
         }
+
+        // 2nd pass: Gradient arc computation
+        self.gradient_ascent();
     }
 }
 
