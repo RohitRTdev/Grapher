@@ -9,9 +9,9 @@ export function getGraphData(graph: Graph) {
         id: e.id,
         color: e.color_code,
         fnVal: e.fn_val,
-        fx: e.x * 10000, 
-        fy: e.y * 10000,
-        fz: e.z * 10000
+        fx: e.x * 100, 
+        fy: e.y * 100,
+        fz: e.z * 100
       })),
       links: graph.edges.map(e => ({
         source: e.source,

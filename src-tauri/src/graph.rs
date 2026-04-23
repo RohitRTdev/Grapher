@@ -1,6 +1,6 @@
 use serde::{Serialize};
-use crate::{vtk::*, manifold::*};
-use std::collections::{HashMap, HashSet, VecDeque};
+use crate::{vtk::*, manifold::*, vertex::*};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
 
 #[derive(Serialize)]
 pub struct Node {
@@ -33,72 +33,7 @@ impl Graph {
     }
 }
 
-#[derive(Debug)]
-struct Vertex<'a> {
-    id: usize, 
-    iv: Vec<usize>,
-    dims: &'a Vec<usize>,
-    spacing: &'a Vec<f64>
-}
 
-impl<'a> Vertex<'a> {
-    fn compute_id(iv: &Vec<usize>, dims: &Vec<usize>) -> usize {
-        let mut data_idx = 0;
-        let mut dim_prod = 1;
-        for idx in (0..dims.len()).rev() {
-            data_idx += iv[idx] * dim_prod;
-            dim_prod *= dims[dims.len() - idx - 1]; 
-        }
-
-        data_idx
-    }
-
-    fn new(iv: Vec<usize>, id: usize, dims: &'a Vec<usize>, spacing: &'a Vec<f64>) -> Self {
-        Vertex {
-            iv,
-            id,
-            dims,
-            spacing
-        }
-    }
-
-    fn get_neighbor(cur: &'a Vertex, offset: &Vec<i8>) -> Self {
-        let mut iv = vec![0; cur.dims.len()];
-        for dim in 0..cur.dims.len() {
-            iv[dim] = (cur.iv[dim] as isize + offset[dim] as isize) as usize;
-        }
-
-        let id = Self::compute_id(&iv, cur.dims);
-
-        Self {
-            iv,
-            id,
-            dims: cur.dims,
-            spacing: cur.spacing
-        }
-    }
-
-    fn is_neighbor(&self, other: &Vertex) -> bool {
-        let mut diff = vec![0; self.dims.len()];
-        for dim in 0..self.dims.len() {
-            diff[dim] = self.iv[dim] as isize - other.iv[dim] as isize;
-        }
-
-        diff.iter().all(|&x| x == 0 || x == 1) 
-        || diff.iter().all(|&x| x == 0 || x == -1) 
-    }
-
-    fn get_vertex(&self) -> Vec<f64> {
-        let mut vertex = vec![0f64; self.iv.len()];
-        for dim in 0..self.iv.len() {
-            vertex[dim] = self.spacing[dim] * self.iv[self.iv.len() - dim - 1] as f64 
-            // Translate the structure to bring it to center of camera
-            - ((self.dims[dim] as f64) / 2.0);
-        }
-
-        vertex
-    }
-}
 
 
 #[derive(Debug, PartialEq)]
@@ -108,21 +43,21 @@ enum CriticalPointType {
     Maxima
 }
 
-struct ExtGraph<'a> {
-    volume: &'a VtkVolume,
+struct ExtGraph {
+    volume: Rc<VtkVolume>,
     graph: Graph,
     cache: HashMap<usize, CriticalPointType>,
-    neighbor_idx_set: Vec<Vec<i8>>
+    neighbor_idx_set: Rc<RefCell<Vec<Vec<i8>>>>
 }
 
 
-impl<'a> ExtGraph<'a> {
-    fn new(volume: &'a VtkVolume) -> Self {
+impl ExtGraph {
+    fn new(volume: VtkVolume) -> Self {
         ExtGraph {
-            volume,
+            volume: Rc::new(volume),
             graph: Graph::new(),
             cache: HashMap::new(),
-            neighbor_idx_set: vec![]
+            neighbor_idx_set: Rc::new(RefCell::new(vec![]))
         }
     }
 
@@ -138,9 +73,8 @@ impl<'a> ExtGraph<'a> {
         let mut highest_vertex_id = 0;
 
         let mut new_id = 0;
-        for neighbor in &self.neighbor_idx_set {
-            let nv = Vertex::get_neighbor(cur, &neighbor);
-            let fnv = self.volume.data[nv.id];
+        for nv in cur.get_neighbors() {
+            let fnv = nv.fn_val; 
             
             // We only care about the upper link
             if fnv > fv {
@@ -341,19 +275,19 @@ impl<'a> ExtGraph<'a> {
                 bits.push(0);
             }
 
-            self.neighbor_idx_set.push(bits);
+            self.neighbor_idx_set.borrow_mut().push(bits);
         }
 
         let mut symmetric_neighbors = vec![];
-        for neighbor in &self.neighbor_idx_set {
+        for neighbor in self.neighbor_idx_set.borrow().iter() {
             let mut opp_neighbor = vec![];
             for comp in neighbor {
                 opp_neighbor.push(-*comp);
             }
             symmetric_neighbors.push(opp_neighbor);
         }
-        self.neighbor_idx_set.append(&mut symmetric_neighbors);
-        println!("{:?}", self.neighbor_idx_set);
+        self.neighbor_idx_set.borrow_mut().append(&mut symmetric_neighbors);
+        println!("{:?}", self.neighbor_idx_set.borrow());
         
         let mut iv = vec![0; num_dims];
 
@@ -365,8 +299,11 @@ impl<'a> ExtGraph<'a> {
                 continue;
             }
 
-            let data_idx = Vertex::compute_id(&iv, &self.volume.dims);
-            let cur = Vertex::new(iv.clone(), data_idx, &self.volume.dims, &self.volume.spacing);
+            let cur = Vertex::create_vtk_vertex(
+                &iv,
+                self.volume.clone(),
+                self.neighbor_idx_set.clone()
+            );
 
             self.classify_point(&cur);
 
@@ -378,15 +315,19 @@ impl<'a> ExtGraph<'a> {
     }
 }
 
-fn get_total_maxima(graph: &Graph) -> usize {
+fn get_critical_points(graph: &Graph) -> [usize; 2] {
     let mut maxima = 0;
+    let mut saddles = 0;
     for pt in &graph.nodes {
         if pt.color_code == 0 {
             maxima += 1;
         }
+        else {
+            saddles += 1;
+        }
     }
 
-    maxima    
+    [maxima, saddles]    
 }
 
 fn process_vtk_file(path: &str) -> Result<Graph, String> {
@@ -395,11 +336,12 @@ fn process_vtk_file(path: &str) -> Result<Graph, String> {
     println!("VTK contents:\nSpacing:{:?}\nDimensions:{:?}\nFirst 3 points: {} {} {}",
             volume.spacing, volume.dims, volume.data[0], volume.data[1], volume.data[2]);
 
-
-    let mut graph = ExtGraph::new(&volume);
+    let total_points = volume.data.len();
+    let mut graph = ExtGraph::new(volume);
     graph.compute();
 
-    println!("There are total: {} points and {} maxima!", volume.data.len(), get_total_maxima(&graph.graph));
+    let [total_maxima, total_saddles] = get_critical_points(&graph.graph);
+    println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
     Ok(graph.graph)
 }
@@ -407,7 +349,6 @@ fn process_vtk_file(path: &str) -> Result<Graph, String> {
 fn process_man_file(path: &str) -> Result<Graph, String> {
     let manifold_info =  read_manifold(path)?;
 
-    println!("{:?}", manifold_info);
 
     Ok(Graph {
         nodes: vec![],
