@@ -1,6 +1,17 @@
 import struct
 from typing import List, Tuple
 
+# File format
+# Header
+# <embedding_dim>(4 bytes) <total_vertices>(4 bytes) <total edges> (4 bytes)
+# Body
+# <Vertex0> <Vertex1> ... <VertexN>
+# <Edge0> <Edge1> ... <EdgeM>
+# EOF
+
+# <Vertex0> = <comp1>(8 bytes float64) <comp2> ... embedding_dim times <fn_val_at_this_vertex> (8 bytes float64)
+# <Edge0> = <src_vertex_id>(4 bytes) <dest_vertex_id>(4 bytes)
+
 def generateManifold(
         embedding_dim: int,
         vertices: List[List[float]],

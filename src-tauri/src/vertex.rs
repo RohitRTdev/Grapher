@@ -1,6 +1,6 @@
 use std::{cell::RefCell, rc::Rc};
 
-use crate::{manifold::*, vtk::VtkVolume};
+use crate::{manifold::*, vertex, vtk::VtkVolume};
 
 struct VtkVertexInfo {
     iv: Vec<usize>,
@@ -8,13 +8,13 @@ struct VtkVertexInfo {
     neighbor_offset: Rc<RefCell<Vec<Vec<i8>>>>
 } 
 
-struct ManifoldVertexInfo<'a> {
-    manifold: &'a Manifold
+struct ManifoldVertexInfo {
+    manifold: Rc<Manifold>
 } 
 
-
 enum VertexType {
-    Vtk(VtkVertexInfo)
+    Vtk(VtkVertexInfo),
+    Manifold(ManifoldVertexInfo)
 }
 
 pub struct Vertex {
@@ -54,6 +54,20 @@ impl Vertex {
         }
     }
 
+    pub fn create_manifold_vertex(
+        id: usize,
+        manifold: Rc<Manifold>
+    ) -> Self {
+        let fn_val = manifold.values[id];
+        Vertex {
+            id,
+            fn_val,
+            vtype: VertexType::Manifold(ManifoldVertexInfo { 
+                manifold
+            }) 
+        }
+    }
+
     pub fn get_neighbors(&self) -> Vec<Self> {
         let mut neighbors = vec![];
         match &self.vtype {
@@ -66,6 +80,13 @@ impl Vertex {
                     
                     let nv = Self::create_vtk_vertex(&iv, vert_info.vtk_volume.clone(), vert_info.neighbor_offset.clone());
                     neighbors.push(nv); 
+                }
+            },
+            VertexType::Manifold(vert_info) => {
+                // In this case, we just get the neighbor information directly from the adjacency list
+                for &neighbor in vert_info.manifold.graph.neighbors[self.id].iter() {
+                    let nv = Self::create_manifold_vertex(neighbor, vert_info.manifold.clone());
+                    neighbors.push(nv);
                 }
             }
         }
@@ -92,6 +113,13 @@ impl Vertex {
                         panic!("Critical internal error! Vertex types don't match!");
                     }
                 }
+            },
+            VertexType::Manifold(vert_info) => {
+                if !matches!(other.vtype, VertexType::Manifold(_)) {
+                    panic!("Critical internal error! Vertex types don't match!");
+                }
+
+                vert_info.manifold.graph.neighbors[other.id].contains(&self.id)
             }
         }
     }
@@ -107,6 +135,9 @@ impl Vertex {
                 }
     
                 vertex
+            },
+            VertexType::Manifold(vert_info) => {
+                vert_info.manifold.vertices[self.id].clone()
             }
         }
     }

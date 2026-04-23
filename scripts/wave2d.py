@@ -3,36 +3,24 @@ import matplotlib.pyplot as plt
 from manifold import generateManifold
 
 
-def multi_gaussian(x, y, centers, sigma):
-    z = np.zeros_like(x)
-    for (cx, cy) in centers:
-        z += np.exp(-((x - cx)**2 + (y - cy)**2) / (sigma**2))
-    return z
+def wave_function(x, y):
+    r2 = x**2 + y**2
+
+    # central bump + oscillations
+    return np.exp(-r2) * np.cos(3 * x) * np.sin(3 * y)
 
 
-def generate_gaussian_grid(n: int, extent: float = 2.0):
+def generate_wave_grid(n: int, extent: float = 2.0):
     x = np.linspace(-extent, extent, n)
     y = np.linspace(-extent, extent, n)
     X, Y = np.meshgrid(x, y)
 
-    # Define 4 centers (corners of square)
-    a = extent * 0.6
-    centers = [
-        (-a, -a),
-        (-a,  a),
-        ( a, -a),
-        ( a,  a)
-    ]
-
-    sigma = 0.6
-
-    Z = multi_gaussian(X, Y, centers, sigma)
+    Z = wave_function(X, Y)
 
     vertices = []
     values = []
     index_map = {}
 
-    # Vertices + scalar field
     idx = 0
     for i in range(n):
         for j in range(n):
@@ -41,14 +29,11 @@ def generate_gaussian_grid(n: int, extent: float = 2.0):
             zv = Z[i, j]
 
             vertices.append([xv, yv, zv])
-
-            # Here, our function is just the height map of the surface
             values.append(zv)
 
             index_map[(i, j)] = idx
             idx += 1
 
-    # Create the edges 
     edges = []
     for i in range(n):
         for j in range(n):
@@ -69,7 +54,6 @@ def generate_gaussian_grid(n: int, extent: float = 2.0):
             if is_within_y and j > 0:
                 edges.append((u, index_map[(i + 1, j - 1)]))
 
-
     return vertices, values, edges, X, Y, Z
 
 
@@ -79,7 +63,7 @@ def plot_graph(X, Y, Z, vertices, edges):
     ax_wireframe = fig.add_subplot(1, 2, 2, projection="3d")
 
     ax_surface.plot_surface(X, Y, Z)
-    ax_surface.set_title("Surface plot")
+    ax_surface.set_title("Wave Surface")
 
     for u, v in edges:
         x = [vertices[u][0], vertices[v][0]]
@@ -94,21 +78,22 @@ def plot_graph(X, Y, Z, vertices, edges):
 
     ax_wireframe.scatter(xs, ys, zs, s=5)
 
-    ax_wireframe.set_title("Manifold 1d skeleton")
+    ax_wireframe.set_title("1-skeleton")
 
     plt.show()
+
 
 if __name__ == "__main__":
     n = 60
 
-    vertices, values, edges, X, Y, Z = generate_gaussian_grid(n)
+    vertices, values, edges, X, Y, Z = generate_wave_grid(n)
 
     generateManifold(
         embedding_dim=3,
         vertices=vertices,
         values=values,
         edges=edges,
-        file_path="gaussian2d.man"
+        file_path="wave2d.man"
     )
 
     print(f"Vertices: {len(vertices)}, Edges: {len(edges)}")

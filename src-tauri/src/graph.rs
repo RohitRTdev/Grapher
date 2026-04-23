@@ -1,6 +1,9 @@
 use serde::{Serialize};
-use crate::{vtk::*, manifold::*, vertex::*};
+use crate::{manifold::*, vertex::*, vtk::*};
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
+use rand::{rngs::ThreadRng, Rng};
+
+const SIMPLICITY_RANDOMNESS: f64 = 0.6;
 
 #[derive(Serialize)]
 pub struct Node {
@@ -39,49 +42,82 @@ impl Graph {
 #[derive(Debug, PartialEq)]
 enum CriticalPointType {
     Saddle(Vec<usize>),
-    Other(usize),
+    Other(Option<usize>),
     Maxima
 }
 
-struct ExtGraph {
+struct VtkExtGraphType {
     volume: Rc<VtkVolume>,
-    graph: Graph,
-    cache: HashMap<usize, CriticalPointType>,
     neighbor_idx_set: Rc<RefCell<Vec<Vec<i8>>>>
 }
 
+struct ManifoldExtGraphType {
+    volume: Rc<Manifold>
+}
+
+enum ExtGraphImpl {
+    Vtk(VtkExtGraphType),
+    Manifold(ManifoldExtGraphType)
+}
+
+struct ExtGraph {
+    ext_type: ExtGraphImpl,
+    graph: RefCell<Graph>,
+    cache: RefCell<HashMap<usize, CriticalPointType>>,
+    rng: RefCell<ThreadRng>
+}
 
 impl ExtGraph {
-    fn new(volume: VtkVolume) -> Self {
+    fn new_with_vtk(volume: VtkVolume) -> Self {
+        let rng = rand::thread_rng();
+
         ExtGraph {
-            volume: Rc::new(volume),
-            graph: Graph::new(),
-            cache: HashMap::new(),
-            neighbor_idx_set: Rc::new(RefCell::new(vec![]))
+            ext_type: ExtGraphImpl::Vtk (
+                VtkExtGraphType {
+                    volume: Rc::new(volume),
+                    neighbor_idx_set: Rc::new(RefCell::new(vec![]))
+                }
+            ),
+            graph: RefCell::new(Graph::new()),
+            cache: RefCell::new(HashMap::new()),
+            rng: RefCell::new(rng)
         }
     }
 
-    fn classify_point(&mut self, cur: &Vertex) {
+    fn new_with_manifold(volume: Manifold) -> Self {
+        let rng = rand::thread_rng();
+        ExtGraph {
+            ext_type: ExtGraphImpl::Manifold(
+                ManifoldExtGraphType { volume: Rc::new(volume) }
+            ),
+            graph: RefCell::new(Graph::new()),
+            cache: RefCell::new(HashMap::new()),
+            rng: RefCell::new(rng)
+        }
+    }
+
+    fn classify_point(&self, cur: &Vertex) {
         const MAXIMA: u8 = 0;
         const SADDLE: u8 = 1;
         
         let mut upper_link: HashMap<usize, Vec<Vertex>> = HashMap::new();
     
-        let fv = self.volume.data[cur.id];
+        let fv = cur.fn_val;
         
-        let mut highest_vertex_val = -std::f64::INFINITY;
-        let mut highest_vertex_id = 0;
+        let mut highest_vertex_val = fv;
+        let mut highest_vertex_id = None;
 
         let mut new_id = 0;
         for nv in cur.get_neighbors() {
             let fnv = nv.fn_val; 
             
             // We only care about the upper link
-            if fnv > fv {
+            // A basic implementation of simulation of simplicity
+            if fnv > fv || (fnv == fv && self.rng.borrow_mut().gen_bool(SIMPLICITY_RANDOMNESS)) {
                 // Keep track of the highest neighbor
-                if fnv >= highest_vertex_val {
+                if fnv > highest_vertex_val {
                     highest_vertex_val = fnv;
-                    highest_vertex_id = nv.id;
+                    highest_vertex_id = Some(nv.id);
                 }
 
                 // Find which component in the upper link this vertex belongs to and insert it there
@@ -119,7 +155,7 @@ impl ExtGraph {
                 let mut fn_val = -std::f64::INFINITY;
                 let mut chosen_vertex = &comp_vert[0];
                 for vert in comp_vert {
-                    let cur_val = self.volume.data[vert.id];
+                    let cur_val = vert.fn_val;
                     if fn_val < cur_val {
                         fn_val = cur_val;
                         chosen_vertex = vert;
@@ -159,40 +195,54 @@ impl ExtGraph {
                     z 
                 };
                 
-                self.graph.nodes.push(node);
+                self.graph.borrow_mut().nodes.push(node);
             },
             _ => {}
         }
-        self.cache.insert(cur.id, pt_type);
+        self.cache.borrow_mut().insert(cur.id, pt_type);
     }
 
     fn is_boundary_point(&self, iv: &Vec<usize>) -> bool {
-        for dim in 0..iv.len() {
-            if iv[dim] == 0 || iv[dim] == self.volume.dims[self.volume.dims.len() - dim - 1] - 1 {
-                return true;
+        match &self.ext_type {
+            ExtGraphImpl::Vtk(vtk_info) => {
+                for dim in 0..iv.len() {
+                    if iv[dim] == 0 || iv[dim] == vtk_info.volume.dims[vtk_info.volume.dims.len() - dim - 1] - 1 {
+                        return true;
+                    }
+                }
+
+                false
+            },
+            _ => {
+                panic!("is_boundary_point() called on non vtk type!");
             }
         }
-
-        false
     }
 
     // Updates the loop index and tells whether iteration must continue
     fn update_iv(&self, iv: &mut Vec<usize>) -> bool {
-        for dim in (0..self.volume.dims.len()).rev() {
-            iv[dim] += 1;
-            if iv[dim] >= self.volume.dims[self.volume.dims.len() - dim - 1] {
-                // We have iterated over all points
-                if dim == 0 {
-                    return false;
+        match &self.ext_type {
+            ExtGraphImpl::Vtk(vtk_info) => {
+                for dim in (0..vtk_info.volume.dims.len()).rev() {
+                    iv[dim] += 1;
+                    if iv[dim] >= vtk_info.volume.dims[vtk_info.volume.dims.len() - dim - 1] {
+                        // We have iterated over all points
+                        if dim == 0 {
+                            return false;
+                        }
+                        iv[dim] = 0;
+                    }
+                    else {
+                        break;
+                    }
                 }
-                iv[dim] = 0;
-            }
-            else {
-                break;
+
+                true
+            },
+            _ => {
+                panic!("update_iv() called on non vtk type!");
             }
         }
-
-        return true
     }
 
     // Follow the gradient until we hit a maxima or boundary
@@ -204,9 +254,16 @@ impl ExtGraph {
             work_queue.push_back(item);
         });
 
+        let mut visited = HashSet::new();
+
         while !work_queue.is_empty() {
             let cur = work_queue.pop_front().unwrap();
-            if let Some(vertex) = self.cache.get(&cur) {
+            
+            if visited.contains(&cur) {
+                continue;
+            }
+
+            if let Some(vertex) = self.cache.borrow().get(&cur) {
                 match vertex {
                     CriticalPointType::Maxima => {
                         // We have reached a maxima, stop traversal along this path
@@ -215,16 +272,14 @@ impl ExtGraph {
                     /* Ideally, we must not hit a saddle since we're traversing from d-1 saddles */
                     /* However, I'm still keeping this here for safety */
                     CriticalPointType::Saddle(vertices) => {
-                        // A saddle or other point indicates that we need to continue exploring this path
-                        // Add new neighbors to work list
-                        vertices.iter().for_each(|&item| {
-                            work_queue.push_back(item);
-                        });
-
-                        println!("Hit a saddle during traversal {:?}", vertex);
+                        for vert in vertices {
+                            work_queue.push_back(*vert);
+                        }
                     },
                     CriticalPointType::Other(highest_vertex) => {
-                        work_queue.push_back(*highest_vertex);
+                        if let Some(highest_vertex_inner) = highest_vertex {
+                            work_queue.push_back(*highest_vertex_inner);
+                        }
                     }
                 }
             }
@@ -232,6 +287,7 @@ impl ExtGraph {
                 // The vertex info not stored in cache indicates that this is a boundary point
                 // Do nothing in this case
             }
+            visited.insert(cur);
         }
 
 
@@ -239,15 +295,14 @@ impl ExtGraph {
     }
 
     fn gradient_ascent(&mut self) {
-        for (&vertex_id, vertex_type) in &self.cache {
+        for (&vertex_id, vertex_type) in self.cache.borrow().iter() {
             match vertex_type {
                 CriticalPointType::Saddle(gradients) => {
-                    println!("Processing saddle id: {} and type={:?}", vertex_id, vertex_type);
                     let targets = self.path_traverse(gradients);
 
                     targets.iter().for_each(|&target| {
                         // Add an edge from this saddle to every maxima reachable from this saddle
-                        self.graph.edges.push(Edge {
+                        self.graph.borrow_mut().edges.push(Edge {
                             source: vertex_id,
                             target
                         })
@@ -259,55 +314,71 @@ impl ExtGraph {
     }
 
     fn compute(&mut self) {
-        let num_dims = self.volume.dims.len(); 
+        match &self.ext_type {
+            ExtGraphImpl::Vtk(vtk_info) => {
+                let num_dims = vtk_info.volume.dims.len(); 
 
-        // Get the neighbor indices for this vertex based on freudenthal division
-        for value in 1..(1 << num_dims) {
-            let mut bits = Vec::new();
+                // Get the neighbor indices for this vertex based on freudenthal division
+                for value in 1..(1 << num_dims) {
+                    let mut bits = Vec::new();
 
-            let mut x = value;
-            while x > 0 {
-                bits.push((x & 1) as i8);
-                x >>= 1;
+                    let mut x = value;
+                    while x > 0 {
+                        bits.push((x & 1) as i8);
+                        x >>= 1;
+                    }
+
+                    while bits.len() < num_dims {
+                        bits.push(0);
+                    }
+
+                    vtk_info.neighbor_idx_set.borrow_mut().push(bits);
+                }
+
+                let mut symmetric_neighbors = vec![];
+                for neighbor in vtk_info.neighbor_idx_set.borrow().iter() {
+                    let mut opp_neighbor = vec![];
+                    for comp in neighbor {
+                        opp_neighbor.push(-*comp);
+                    }
+                    symmetric_neighbors.push(opp_neighbor);
+                }
+
+                vtk_info.neighbor_idx_set.borrow_mut().append(&mut symmetric_neighbors);
+                println!("{:?}", vtk_info.neighbor_idx_set.borrow());
+                
+                let mut iv = vec![0; num_dims];
+
+                // 1st pass: Point classification
+                let mut do_work = true;
+                while do_work {
+                    if self.is_boundary_point(&iv) {
+                        do_work = self.update_iv(&mut iv);
+                        continue;
+                    }
+
+                    let cur = Vertex::create_vtk_vertex(
+                        &iv,
+                        vtk_info.volume.clone(),
+                        vtk_info.neighbor_idx_set.clone()
+                    );
+
+                    self.classify_point(&cur);
+
+                    do_work = self.update_iv(&mut iv);
+                }
+            },
+            ExtGraphImpl::Manifold(manifold_info) => {
+                // 1st pass: Point classification
+                for id in 0..manifold_info.volume.vertices.len() {
+                    let cur = Vertex::create_manifold_vertex(
+                        id,
+                        manifold_info.volume.clone()
+                    );
+
+                    self.classify_point(&cur);
+                }
             }
-
-            while bits.len() < num_dims {
-                bits.push(0);
-            }
-
-            self.neighbor_idx_set.borrow_mut().push(bits);
-        }
-
-        let mut symmetric_neighbors = vec![];
-        for neighbor in self.neighbor_idx_set.borrow().iter() {
-            let mut opp_neighbor = vec![];
-            for comp in neighbor {
-                opp_neighbor.push(-*comp);
-            }
-            symmetric_neighbors.push(opp_neighbor);
-        }
-        self.neighbor_idx_set.borrow_mut().append(&mut symmetric_neighbors);
-        println!("{:?}", self.neighbor_idx_set.borrow());
-        
-        let mut iv = vec![0; num_dims];
-
-        // 1st pass: Point classification
-        let mut do_work = true;
-        while do_work {
-            if self.is_boundary_point(&iv) {
-                do_work = self.update_iv(&mut iv);
-                continue;
-            }
-
-            let cur = Vertex::create_vtk_vertex(
-                &iv,
-                self.volume.clone(),
-                self.neighbor_idx_set.clone()
-            );
-
-            self.classify_point(&cur);
-
-            do_work = self.update_iv(&mut iv);
         }
 
         // 2nd pass: Gradient arc computation
@@ -337,23 +408,25 @@ fn process_vtk_file(path: &str) -> Result<Graph, String> {
             volume.spacing, volume.dims, volume.data[0], volume.data[1], volume.data[2]);
 
     let total_points = volume.data.len();
-    let mut graph = ExtGraph::new(volume);
+    let mut graph = ExtGraph::new_with_vtk(volume);
     graph.compute();
 
-    let [total_maxima, total_saddles] = get_critical_points(&graph.graph);
+    let [total_maxima, total_saddles] = get_critical_points(&graph.graph.borrow());
     println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
-    Ok(graph.graph)
+    Ok(graph.graph.into_inner())
 }
 
 fn process_man_file(path: &str) -> Result<Graph, String> {
-    let manifold_info =  read_manifold(path)?;
+    let volume =  read_manifold(path)?;
+    let total_points = volume.vertices.len();
+    let mut graph = ExtGraph::new_with_manifold(volume);
+    graph.compute();
 
+    let [total_maxima, total_saddles] = get_critical_points(&graph.graph.borrow());
+    println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
-    Ok(Graph {
-        nodes: vec![],
-        edges: vec![]
-    })
+    Ok(graph.graph.into_inner())
 }
 
 #[tauri::command]
