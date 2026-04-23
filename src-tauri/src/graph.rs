@@ -1,5 +1,5 @@
 use serde::{Serialize};
-use crate::vtk::*;
+use crate::{vtk::*, manifold::*};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Serialize)]
@@ -389,9 +389,8 @@ fn get_total_maxima(graph: &Graph) -> usize {
     maxima    
 }
 
-
-fn process_vtk_file(path: String) -> Result<Graph, String> {
-    let volume = read_vtk(&path)?;
+fn process_vtk_file(path: &str) -> Result<Graph, String> {
+    let volume = read_vtk(path)?;
     
     println!("VTK contents:\nSpacing:{:?}\nDimensions:{:?}\nFirst 3 points: {} {} {}",
             volume.spacing, volume.dims, volume.data[0], volume.data[1], volume.data[2]);
@@ -405,10 +404,26 @@ fn process_vtk_file(path: String) -> Result<Graph, String> {
     Ok(graph.graph)
 }
 
+fn process_man_file(path: &str) -> Result<Graph, String> {
+    let manifold_info =  read_manifold(path)?;
+
+    println!("{:?}", manifold_info);
+
+    Ok(Graph {
+        nodes: vec![],
+        edges: vec![]
+    })
+}
+
 #[tauri::command]
-pub async fn process_vtk_file_async(path: String) -> Result<Graph, String> {
+pub async fn process_file_async(path: String) -> Result<Graph, String> {
     tokio::task::spawn_blocking(move || {
-        process_vtk_file(path)
+        if path.ends_with(".vtk") {
+            process_vtk_file(&path)
+        }
+        else {
+            process_man_file(&path)
+        }
     })
     .await.expect("Unexpected tokio error!!")
 }

@@ -1,4 +1,5 @@
 mod vtk;
+mod manifold;
 mod graph;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -6,7 +7,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init()) 
-        .invoke_handler(tauri::generate_handler![graph::process_vtk_file_async])
+        .invoke_handler(tauri::generate_handler![graph::process_file_async])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

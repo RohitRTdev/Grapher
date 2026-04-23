@@ -10,7 +10,7 @@ pub struct VtkVolume {
 
 // This function is not production grade or anything and is not safe at all
 // This is just to make sense of the vtk file but the format is not rigorously tested by any means
-pub fn read_vtk(path: &String) -> Result<VtkVolume, String> {
+pub fn read_vtk(path: &str) -> Result<VtkVolume, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
     let reader = BufReader::new(file);
 

@@ -24,7 +24,7 @@ export async function fetchData(loadCallback: (start: boolean) => void) : Promis
     const selected = await open({
         multiple: false,
         filters: [
-        { name: "VTK Files", extensions: ["vtk"] }
+        { name: "VTK/Manifold Files", extensions: ["vtk", "man"] }
         ]
     });
 
@@ -35,7 +35,7 @@ export async function fetchData(loadCallback: (start: boolean) => void) : Promis
     loadCallback(true);        
 
     try {
-        const result = await invoke<Graph>("process_vtk_file_async", {
+        const result = await invoke<Graph>("process_file_async", {
         path: selected
         });
 
