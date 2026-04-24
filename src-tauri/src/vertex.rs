@@ -1,9 +1,9 @@
-use linfa_nn::NearestNeighbourIndex;
-use ndarray::ArrayView1;
-use std::rc::Rc;
+use ndarray::{ArrayView1, Array2};
+use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, distance::L2Dist};
+use std::{collections::HashSet, rc::Rc};
 use crate::{manifold::*, vtk::VtkVolume};
 
-const KNN: usize = 10;
+const KNN: usize = 25;
 
 struct VtkVertexInfo {
     iv: Vec<usize>,
@@ -11,23 +11,23 @@ struct VtkVertexInfo {
     neighbor_offset: Rc<Vec<Vec<i8>>>
 } 
 
-struct ManifoldVertexInfo<'a, 'b> {
+struct ManifoldVertexInfo<'a> {
     manifold: Rc<&'a Manifold>,
-    kdtree: Option<&'a Box<dyn NearestNeighbourIndex<f64> + 'b>>
+    kdtree: Option<Rc<NN>>
 } 
 
-enum VertexType<'a, 'b> {
+enum VertexType<'a> {
     Vtk(VtkVertexInfo),
-    Manifold(ManifoldVertexInfo<'a, 'b>)
+    Manifold(ManifoldVertexInfo<'a>)
 }
 
-pub struct Vertex<'a, 'b> {
+pub struct Vertex<'a> {
     pub id: usize, 
     pub fn_val: f64,
-    vtype: VertexType<'a, 'b>
+    vtype: VertexType<'a>
 }
 
-impl<'a, 'b> Vertex<'a, 'b> {
+impl<'a> Vertex<'a> {
     fn compute_id(iv: &Vec<usize>, dims: &Vec<usize>) -> usize {
         let mut data_idx = 0;
         let mut dim_prod = 1;
@@ -61,7 +61,7 @@ impl<'a, 'b> Vertex<'a, 'b> {
     pub fn create_manifold_vertex(
         id: usize,
         manifold: Rc<&'a Manifold>,
-        kdtree: Option<&'a Box<dyn NearestNeighbourIndex<f64> + 'b>>
+        kdtree: Option<Rc<NN>>
     ) -> Self {
         let fn_val = manifold.values[id];
         Vertex {
@@ -89,26 +89,15 @@ impl<'a, 'b> Vertex<'a, 'b> {
                 }
             },
             VertexType::Manifold(vert_info) => {
-                if let Some(nn) = vert_info.kdtree {
-                    let point = &vert_info.manifold.vertices[self.id];
-                    let query = ArrayView1::from(point.as_slice());
-                    
-                    // Use KNN to find the neighbors when we don't have the neighborhood information
-                    let result = nn.k_nearest(query, KNN + 1).unwrap();
-                    result.iter()
-                    .filter(|(_, idx)| {
-                        // Exclude providing the same element as output
-                        self.id != *idx
-                    })
-                    .for_each(|(_, idx)| {
+                if let Some(nn) = &vert_info.kdtree {
+                    for &neighbor in nn.neighbor_info.neighbors[self.id].iter() {
                         let nv = Self::create_manifold_vertex(
-                            *idx,
+                            neighbor,
                             vert_info.manifold.clone(),
-                            vert_info.kdtree
+                            Some(nn.clone())
                         );
-
                         neighbors.push(nv);
-                    });
+                    }
                 }
                 else {
                     // In this case, we just get the neighbor information directly from the adjacency list
@@ -116,7 +105,7 @@ impl<'a, 'b> Vertex<'a, 'b> {
                         let nv = Self::create_manifold_vertex(
                             neighbor,
                             vert_info.manifold.clone(),
-                            vert_info.kdtree
+                            None
                         );
                         neighbors.push(nv);
                     }
@@ -152,17 +141,8 @@ impl<'a, 'b> Vertex<'a, 'b> {
                     panic!("Critical internal error! Vertex types don't match!");
                 }
 
-                if let Some(nn) = vert_info.kdtree {
-                    let point = &vert_info.manifold.vertices[self.id];
-                    let query = ArrayView1::from(point.as_slice());
-                    
-                    // Use KNN to find the neighbors when we don't have the neighborhood information
-                    let result = nn.k_nearest(query, KNN).unwrap();
-
-                    // Check if other_node is present in the list of predicted neighbors 
-                    result.iter().any(|(_, idx)| {
-                        other.id == *idx
-                    })
+                if let Some(nn) = &vert_info.kdtree {
+                    nn.neighbor_info.neighbors[self.id].contains(&other.id)
                 }
                 else {
                     vert_info.manifold.graph.neighbors[other.id].contains(&self.id)
@@ -190,3 +170,49 @@ impl<'a, 'b> Vertex<'a, 'b> {
     }
 }
 
+pub struct NN {
+    neighbor_info: AdjList
+}
+
+impl NN {
+    pub fn new() -> Self {
+        Self {
+            neighbor_info: AdjList {
+                neighbors: Vec::new()
+            }
+        }
+    }
+
+    pub fn build_neighborhood(&mut self, volume: &Manifold) {
+        let n = volume.vertices.len();
+        let d = volume.embedding_dim;
+
+        self.neighbor_info.neighbors = vec![HashSet::new(); n];
+
+        let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
+
+        let data = Array2::from_shape_vec((n, d), flat).unwrap(); 
+        
+        let kdtree = CommonNearestNeighbour::KdTree
+            .from_batch(&data, L2Dist)
+            .unwrap();
+
+        // Build the entire adjacency list at init
+        for id in 0..volume.vertices.len() {
+            let point = &volume.vertices[id];
+            let query = ArrayView1::from(point.as_slice());
+            
+            // Use KNN to find the neighbors when we don't have the neighborhood information
+            let result = kdtree.k_nearest(query, KNN).unwrap();
+            
+            result.iter()
+            .filter(|(_, idx)| {
+                // Exclude providing the same element as its neighbor
+                id != *idx
+            })
+            .for_each(|(_, idx)| {
+                self.neighbor_info.neighbors[id].insert(*idx);
+            });
+        }
+    }
+}

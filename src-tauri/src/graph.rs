@@ -1,5 +1,3 @@
-use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, NearestNeighbourIndex, distance::L2Dist};
-use ndarray::Array2;
 use serde::{Serialize};
 use crate::{manifold::*, vertex::*, vtk::*};
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
@@ -55,7 +53,7 @@ struct VtkExtGraphType {
 
 struct ManifoldExtGraphType<'a> {
     volume: Rc<&'a Manifold>,
-    data: Option<&'a Array2<f64>>
+    kdtree: Option<Rc<NN>>
 }
 
 enum ExtGraphImpl<'a> {
@@ -87,26 +85,28 @@ impl<'a> ExtGraph<'a> {
         }
     }
 
-    fn new_with_manifold(volume: &'a Manifold, data: Option<&'a Array2<f64>>) -> Self {
+    fn new_with_manifold(volume: &'a Manifold, is_ref_mode: bool) -> Self {
         let rng = rand::thread_rng();
+        let nn = if !is_ref_mode {
+            let mut nn = NN::new();
+            nn.build_neighborhood(volume);
+            Some(Rc::new(nn))
+        }
+        else {
+            None
+        };
+
         ExtGraph {
             ext_type: ExtGraphImpl::Manifold(
                 ManifoldExtGraphType { 
                     volume: Rc::new(volume),
-                    data
+                    kdtree: nn
                 }
             ),
             graph: RefCell::new(Graph::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng)
         }
-    }
-
-
-    fn fetch_kd_tree<'b>(data: &'b Array2<f64>) -> Box<dyn NearestNeighbourIndex<f64> + 'b> {
-        CommonNearestNeighbour::KdTree
-            .from_batch(data, L2Dist)
-            .unwrap()
     }
 
     fn classify_point(&self, cur: &Vertex) {
@@ -389,19 +389,14 @@ impl<'a> ExtGraph<'a> {
                 }
             },
             ExtGraphImpl::Manifold(manifold_info) => {
-                let nn = if let Some(data) = manifold_info.data {
-                    Some(Self::fetch_kd_tree(data))
-                }
-                else {
-                    None
-                };
-                
                 // 1st pass: Point classification
                 for id in 0..manifold_info.volume.vertices.len() {
                     let cur = Vertex::create_manifold_vertex(
                         id,
                         manifold_info.volume.clone(),
-                        nn.as_ref()
+                        manifold_info.kdtree.as_ref().map(|nn| {
+                            nn.clone()
+                        })
                     );
 
                     self.classify_point(&cur);
@@ -429,17 +424,6 @@ fn get_critical_points(graph: &Graph) -> [usize; 2] {
     [maxima, saddles]    
 }
 
-fn init_data_array(volume: &Manifold) -> Array2<f64> {
-    let n = volume.vertices.len();
-    let d = volume.embedding_dim;
-
-    let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
-
-    let data = Array2::from_shape_vec((n, d), flat).unwrap(); 
-
-    data
-}
-
 fn process_vtk_file(path: &str) -> Result<Graph, String> {
     let volume = read_vtk(path)?;
     
@@ -459,11 +443,10 @@ fn process_vtk_file(path: &str) -> Result<Graph, String> {
 fn process_man_file(path: &str) -> Result<Graph, String> {
     let volume =  read_manifold(path)?;
     let total_points = volume.vertices.len();
-    let mut graph_ref = ExtGraph::new_with_manifold(&volume, None);
+    let mut graph_ref = ExtGraph::new_with_manifold(&volume, true);
     graph_ref.compute();
 
-    let data = init_data_array(&volume);
-    let mut graph_real = ExtGraph::new_with_manifold(&volume, Some(&data));
+    let mut graph_real = ExtGraph::new_with_manifold(&volume, false);
     graph_real.compute();
 
     let [total_maxima, total_saddles] = get_critical_points(&graph_real.graph.borrow());
