@@ -12,7 +12,21 @@ type Edge = {
   target: number;
 };
 
+export type Stats = {
+  time: number;
+  memory: number;
+  accuracy: number;
+}
+
 export type Graph = {
   nodes: Node[];
   edges: Edge[];
 };
+
+export type FinalResult = {
+  graph: Graph;
+  time: number;
+  memory: number;
+  accuracy: number;
+};
+

@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import type {Graph} from './Types.ts'
+import type {Graph, Stats} from './Types.ts'
 import { getGraphData, fetchData } from "./UI.ts";
 import file_open_img from './assets/file-open.png';
 import reset_img from './assets/reset.png';
@@ -9,6 +9,11 @@ export default function App() {
   const [graph, setGraph] = useState<Graph | null>(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [loading, setLoading] = useState(false);
+  const [stats, setStats] = useState<Stats>({
+                              time: 0,
+                              memory: 0,
+                              accuracy: 0
+                            });
 
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -62,7 +67,12 @@ export default function App() {
     if (!isValidClick()) return;
     try {
       let result = await fetchData(setLoading);
-      setGraph(result);
+      setGraph(result.graph);
+      setStats({
+        time: result.time, 
+        memory: result.memory,
+        accuracy: result.accuracy
+      })
     }
     catch (err) {
       console.error(err);
@@ -107,7 +117,12 @@ export default function App() {
               nodeColor={node => {if (node.color == 0) return "red"; else return "blue";}}
             />
           )}
-          <div className="overlay-text">Maximum graph</div>
+          <div className="overlay-text">
+            <center>Stats</center>
+            Time: {stats.time.toFixed(2)}ms<br/>
+            Memory: {stats.memory.toFixed(2)}KB<br/>
+            Accuracy: {stats.accuracy.toFixed(2)}%<br/>
+          </div>
         </div>
       )}
     </div>

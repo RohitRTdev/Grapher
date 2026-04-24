@@ -74,6 +74,8 @@ pub fn read_manifold(path: &str) -> Result<Manifold, String> {
         graph.neighbors[v].insert(u);
     }
 
+    println!("Total edges: {}", num_edges);
+
     Ok(Manifold {
         embedding_dim,
         vertices,

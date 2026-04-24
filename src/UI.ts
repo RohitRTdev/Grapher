@@ -1,4 +1,4 @@
-import { Graph } from "./Types.ts";
+import { Graph, FinalResult } from "./Types.ts";
 import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -20,7 +20,7 @@ export function getGraphData(graph: Graph) {
     }; 
 }
 
-export async function fetchData(loadCallback: (start: boolean) => void) : Promise<Graph> {
+export async function fetchData(loadCallback: (start: boolean) => void) : Promise<FinalResult> {
     const selected = await open({
         multiple: false,
         filters: [
@@ -35,7 +35,7 @@ export async function fetchData(loadCallback: (start: boolean) => void) : Promis
     loadCallback(true);        
 
     try {
-        const result = await invoke<Graph>("process_file_async", {
+        const result = await invoke<FinalResult>("process_file_async", {
         path: selected
         });
 
