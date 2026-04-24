@@ -1,16 +1,20 @@
 use serde::{Serialize};
-use crate::{manifold::*, vertex::*, vtk::*};
+use crate::{manifold::*, vertex::*, vtk::*, similarity::*};
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
 use rand::{rngs::ThreadRng, Rng};
 use std::time::Instant;
 
 const SIMPLICITY_RANDOMNESS: f64 = 0.6;
+pub const MAXIMA: u8 = 0;
+pub const SADDLE: u8 = 1;
 
-#[derive(Serialize)]
+pub type SaddleCache = HashMap<usize, Vec<f64>>;
+
+#[derive(Serialize, Clone)]
 pub struct Node {
-    id: usize,
-    color_code: u8,
-    fn_val: f64,
+    pub id: usize,
+    pub color_code: u8,
+    pub fn_val: f64,
     x: f64,
     y: f64,
     z: f64
@@ -18,14 +22,14 @@ pub struct Node {
 
 #[derive(Serialize)]
 pub struct Edge {
-    source: usize,
-    target: usize,
+    pub source: usize,
+    pub target: usize,
 }
 
 #[derive(Serialize)]
 pub struct Graph {
-    nodes: Vec<Node>,
-    edges: Vec<Edge>,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
 }
 
 #[derive(Serialize)]
@@ -52,7 +56,7 @@ impl Graph {
 enum CriticalPointType {
     Saddle(Vec<usize>),
     Other(Option<usize>),
-    Maxima
+    Maxima(f64)
 }
 
 struct VtkExtGraphType {
@@ -73,6 +77,7 @@ enum ExtGraphImpl<'a> {
 struct ExtGraph<'a> {
     ext_type: ExtGraphImpl<'a>,
     graph: RefCell<Graph>,
+    neighbors: RefCell<SaddleCache>,
     cache: RefCell<HashMap<usize, CriticalPointType>>,
     rng: RefCell<ThreadRng>
 }
@@ -89,6 +94,7 @@ impl<'a> ExtGraph<'a> {
                 }
             ),
             graph: RefCell::new(Graph::new()),
+            neighbors: RefCell::new(HashMap::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng)
         }
@@ -113,14 +119,13 @@ impl<'a> ExtGraph<'a> {
                 }
             ),
             graph: RefCell::new(Graph::new()),
+            neighbors: RefCell::new(HashMap::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng)
         }
     }
 
     fn classify_point(&self, cur: &Vertex) {
-        const MAXIMA: u8 = 0;
-        const SADDLE: u8 = 1;
         
         let mut upper_link: HashMap<usize, Vec<Vertex>> = HashMap::new();
     
@@ -189,7 +194,7 @@ impl<'a> ExtGraph<'a> {
         } 
         else if upper_link.len() == 0 {
             color_code = MAXIMA;
-            CriticalPointType::Maxima
+            CriticalPointType::Maxima(fv)
         }   
         else {
            CriticalPointType::Other(highest_vertex_id) 
@@ -197,7 +202,7 @@ impl<'a> ExtGraph<'a> {
 
         // Include d-1 saddles and maxima in the graph
         match &pt_type {
-            CriticalPointType::Saddle(_) | CriticalPointType::Maxima => {
+            CriticalPointType::Saddle(_) | CriticalPointType::Maxima(_) => {
                 let vertex = cur.get_vertex();
                 
                 // If 2d case, then just augment 3rd dimension as 0
@@ -269,8 +274,8 @@ impl<'a> ExtGraph<'a> {
 
     // Follow the gradient until we hit a maxima or boundary
     // Here, we will do an iterative approach
-    fn path_traverse(&self, gradients: &Vec<usize>) -> HashSet<usize> {
-        let mut reachable_maxima = HashSet::new();
+    fn path_traverse(&self, gradients: &Vec<usize>) -> HashMap<usize, f64> {
+        let mut reachable_maxima: HashMap<usize, f64> = HashMap::new();
         let mut work_queue = VecDeque::new();
         gradients.iter().for_each(|&item| {
             work_queue.push_back(item);
@@ -287,9 +292,9 @@ impl<'a> ExtGraph<'a> {
 
             if let Some(vertex) = self.cache.borrow().get(&cur) {
                 match vertex {
-                    CriticalPointType::Maxima => {
+                    CriticalPointType::Maxima(val) => {
                         // We have reached a maxima, stop traversal along this path
-                        reachable_maxima.insert(cur);
+                        reachable_maxima.insert(cur, *val);
                     },
                     /* Ideally, we must not hit a saddle since we're traversing from d-1 saddles */
                     /* However, I'm still keeping this here for safety */
@@ -322,13 +327,22 @@ impl<'a> ExtGraph<'a> {
                 CriticalPointType::Saddle(gradients) => {
                     let targets = self.path_traverse(gradients);
 
-                    targets.iter().for_each(|&target| {
+                    targets.iter().for_each(|(target, _)| {
                         // Add an edge from this saddle to every maxima reachable from this saddle
                         self.graph.borrow_mut().edges.push(Edge {
                             source: vertex_id,
-                            target
-                        })
-                    })
+                            target: *target
+                        });
+                    });
+
+                    if targets.len() >= 1 {
+                        // Store all the reachable maxima values from this saddle in the cache 
+                        self.neighbors.borrow_mut()
+                        .insert(vertex_id, targets.iter()
+                        .map(|(_, fn_val)| 
+                        {*fn_val})
+                        .collect());
+                    }
                 },
                 _ => {}
             }
@@ -476,14 +490,21 @@ fn process_man_file(path: &str) -> Result<FinalResult, String> {
         memory += neighbor.len() * size_of::<usize>();
     });
 
-    let [total_maxima, total_saddles] = get_critical_points(&graph_real.graph.borrow());
+    let graph1 = graph_ref.graph.into_inner();
+    let graph2 = graph_real.graph.into_inner();
+    let graph1_cache = graph_ref.neighbors.into_inner();
+    let graph2_cache = graph_real.neighbors.into_inner();
+
+    let accuracy = get_accuracy(&graph1, graph1_cache, &graph2, graph2_cache);
+
+    let [total_maxima, total_saddles] = get_critical_points(&graph2);
     println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
     let res = FinalResult {
-        graph: graph_real.graph.into_inner(),
+        graph: graph2,
         time,
         memory: memory as f64 / 1024.0,
-        accuracy: 92.0
+        accuracy
     };
 
     Ok(res)

@@ -79,13 +79,6 @@ export default function App() {
     }
   };
 
-  // Center the graph in the scene once loaded
-  useEffect(() => {
-    if (!graph) return;
-
-    handleRecenter();
-  }, [graph, dimensions]);
-
   return (
     <div className="main-container">
       <div className="navbar">
