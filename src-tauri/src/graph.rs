@@ -1,3 +1,5 @@
+use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, NearestNeighbourIndex, distance::L2Dist};
+use ndarray::Array2;
 use serde::{Serialize};
 use crate::{manifold::*, vertex::*, vtk::*};
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
@@ -48,11 +50,11 @@ enum CriticalPointType {
 
 struct VtkExtGraphType {
     volume: Rc<VtkVolume>,
-    neighbor_idx_set: Rc<RefCell<Vec<Vec<i8>>>>
+    neighbor_idx_set: Rc<Vec<Vec<i8>>>
 }
 
 struct ManifoldExtGraphType {
-    volume: Rc<Manifold>
+    volume: Rc<Manifold>,
 }
 
 enum ExtGraphImpl {
@@ -70,12 +72,12 @@ struct ExtGraph {
 impl ExtGraph {
     fn new_with_vtk(volume: VtkVolume) -> Self {
         let rng = rand::thread_rng();
-
+        let neighbor_idx_set = Rc::new(Self::generate_neighbor_idx_set(&volume));
         ExtGraph {
             ext_type: ExtGraphImpl::Vtk (
                 VtkExtGraphType {
                     volume: Rc::new(volume),
-                    neighbor_idx_set: Rc::new(RefCell::new(vec![]))
+                    neighbor_idx_set
                 }
             ),
             graph: RefCell::new(Graph::new()),
@@ -88,12 +90,31 @@ impl ExtGraph {
         let rng = rand::thread_rng();
         ExtGraph {
             ext_type: ExtGraphImpl::Manifold(
-                ManifoldExtGraphType { volume: Rc::new(volume) }
+                ManifoldExtGraphType { 
+                    volume: Rc::new(volume)
+                }
             ),
             graph: RefCell::new(Graph::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng)
         }
+    }
+
+    fn init_data_array(volume: &Manifold) -> Array2<f64> {
+        let n = volume.vertices.len();
+        let d = volume.embedding_dim;
+
+        let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
+
+        let data = Array2::from_shape_vec((n, d), flat).unwrap(); 
+
+        data
+    }
+
+    fn fetch_kd_tree<'a>(data: &'a Array2<f64>) -> Box<dyn NearestNeighbourIndex<f64> + 'a> {
+        CommonNearestNeighbour::KdTree
+            .from_batch(data, L2Dist)
+            .unwrap()
     }
 
     fn classify_point(&self, cur: &Vertex) {
@@ -313,40 +334,47 @@ impl ExtGraph {
         }
     }
 
+    fn generate_neighbor_idx_set(volume: &VtkVolume) -> Vec<Vec<i8>> {
+        let mut neighbor_idx_set: Vec<Vec<i8>> = Vec::new();
+        let num_dims = volume.dims.len(); 
+
+        // Get the neighbor indices for this vertex based on freudenthal division
+        for value in 1..(1 << num_dims) {
+            let mut bits = Vec::new();
+
+            let mut x = value;
+            while x > 0 {
+                bits.push((x & 1) as i8);
+                x >>= 1;
+            }
+
+            while bits.len() < num_dims {
+                bits.push(0);
+            }
+
+            neighbor_idx_set.push(bits);
+        }
+
+        let mut symmetric_neighbors = vec![];
+        for neighbor in neighbor_idx_set.iter() {
+            let mut opp_neighbor = vec![];
+            for comp in neighbor {
+                opp_neighbor.push(-*comp);
+            }
+            symmetric_neighbors.push(opp_neighbor);
+        }
+
+        neighbor_idx_set.append(&mut symmetric_neighbors);
+        println!("{:?}", neighbor_idx_set);
+
+        neighbor_idx_set
+    }
+
     fn compute(&mut self) {
         match &self.ext_type {
             ExtGraphImpl::Vtk(vtk_info) => {
                 let num_dims = vtk_info.volume.dims.len(); 
 
-                // Get the neighbor indices for this vertex based on freudenthal division
-                for value in 1..(1 << num_dims) {
-                    let mut bits = Vec::new();
-
-                    let mut x = value;
-                    while x > 0 {
-                        bits.push((x & 1) as i8);
-                        x >>= 1;
-                    }
-
-                    while bits.len() < num_dims {
-                        bits.push(0);
-                    }
-
-                    vtk_info.neighbor_idx_set.borrow_mut().push(bits);
-                }
-
-                let mut symmetric_neighbors = vec![];
-                for neighbor in vtk_info.neighbor_idx_set.borrow().iter() {
-                    let mut opp_neighbor = vec![];
-                    for comp in neighbor {
-                        opp_neighbor.push(-*comp);
-                    }
-                    symmetric_neighbors.push(opp_neighbor);
-                }
-
-                vtk_info.neighbor_idx_set.borrow_mut().append(&mut symmetric_neighbors);
-                println!("{:?}", vtk_info.neighbor_idx_set.borrow());
-                
                 let mut iv = vec![0; num_dims];
 
                 // 1st pass: Point classification
@@ -369,11 +397,16 @@ impl ExtGraph {
                 }
             },
             ExtGraphImpl::Manifold(manifold_info) => {
+                let data=  Self::init_data_array(&manifold_info.volume);
+                let nn = Self::fetch_kd_tree(&data);
+                
                 // 1st pass: Point classification
                 for id in 0..manifold_info.volume.vertices.len() {
                     let cur = Vertex::create_manifold_vertex(
                         id,
-                        manifold_info.volume.clone()
+                        manifold_info.volume.clone(),
+                        &nn,
+                        true
                     );
 
                     self.classify_point(&cur);

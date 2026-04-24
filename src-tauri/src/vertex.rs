@@ -1,29 +1,32 @@
-use std::{cell::RefCell, rc::Rc};
+use linfa_nn::NearestNeighbourIndex;
+use std::rc::Rc;
 
-use crate::{manifold::*, vertex, vtk::VtkVolume};
+use crate::{manifold::*, vtk::VtkVolume};
 
 struct VtkVertexInfo {
     iv: Vec<usize>,
     vtk_volume: Rc<VtkVolume>,
-    neighbor_offset: Rc<RefCell<Vec<Vec<i8>>>>
+    neighbor_offset: Rc<Vec<Vec<i8>>>
 } 
 
-struct ManifoldVertexInfo {
-    manifold: Rc<Manifold>
+struct ManifoldVertexInfo<'a, 'b> {
+    manifold: Rc<Manifold>,
+    kdtree: &'a Box<dyn NearestNeighbourIndex<f64> + 'b>,
+    is_ref_mode: bool
 } 
 
-enum VertexType {
+enum VertexType<'a, 'b> {
     Vtk(VtkVertexInfo),
-    Manifold(ManifoldVertexInfo)
+    Manifold(ManifoldVertexInfo<'a, 'b>)
 }
 
-pub struct Vertex {
+pub struct Vertex<'a, 'b> {
     pub id: usize, 
     pub fn_val: f64,
-    vtype: VertexType
+    vtype: VertexType<'a, 'b>
 }
 
-impl Vertex {
+impl<'a, 'b> Vertex<'a, 'b> {
     fn compute_id(iv: &Vec<usize>, dims: &Vec<usize>) -> usize {
         let mut data_idx = 0;
         let mut dim_prod = 1;
@@ -38,7 +41,7 @@ impl Vertex {
     pub fn create_vtk_vertex(
         iv: &Vec<usize>, 
         vtk_volume: Rc<VtkVolume>,
-        neighbor_offset: Rc<RefCell<Vec<Vec<i8>>>>
+        neighbor_offset: Rc<Vec<Vec<i8>>>
     ) -> Self {
         let id = Self::compute_id(&iv, &vtk_volume.dims);
         let fn_val = vtk_volume.data[id]; 
@@ -56,14 +59,18 @@ impl Vertex {
 
     pub fn create_manifold_vertex(
         id: usize,
-        manifold: Rc<Manifold>
+        manifold: Rc<Manifold>,
+        kdtree: &'a Box<dyn NearestNeighbourIndex<f64> + 'b>,
+        is_ref_mode: bool
     ) -> Self {
         let fn_val = manifold.values[id];
         Vertex {
             id,
             fn_val,
             vtype: VertexType::Manifold(ManifoldVertexInfo { 
-                manifold
+                manifold,
+                kdtree,
+                is_ref_mode
             }) 
         }
     }
@@ -72,7 +79,7 @@ impl Vertex {
         let mut neighbors = vec![];
         match &self.vtype {
             VertexType::Vtk(vert_info) => {
-                for neighbor in vert_info.neighbor_offset.borrow().iter() {
+                for neighbor in vert_info.neighbor_offset.iter() {
                     let mut iv = vec![0; vert_info.vtk_volume.dims.len()];
                     for dim in 0..vert_info.vtk_volume.dims.len() {
                         iv[dim] = (vert_info.iv[dim] as isize + neighbor[dim] as isize) as usize;
@@ -85,7 +92,12 @@ impl Vertex {
             VertexType::Manifold(vert_info) => {
                 // In this case, we just get the neighbor information directly from the adjacency list
                 for &neighbor in vert_info.manifold.graph.neighbors[self.id].iter() {
-                    let nv = Self::create_manifold_vertex(neighbor, vert_info.manifold.clone());
+                    let nv = Self::create_manifold_vertex(
+                        neighbor,
+                        vert_info.manifold.clone(),
+                        vert_info.kdtree,
+                        vert_info.is_ref_mode
+                    );
                     neighbors.push(nv);
                 }
             }
