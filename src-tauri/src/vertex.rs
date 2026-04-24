@@ -10,9 +10,8 @@ struct VtkVertexInfo {
 } 
 
 struct ManifoldVertexInfo<'a, 'b> {
-    manifold: Rc<Manifold>,
-    kdtree: &'a Box<dyn NearestNeighbourIndex<f64> + 'b>,
-    is_ref_mode: bool
+    manifold: Rc<&'a Manifold>,
+    kdtree: Option<&'a Box<dyn NearestNeighbourIndex<f64> + 'b>>
 } 
 
 enum VertexType<'a, 'b> {
@@ -59,9 +58,8 @@ impl<'a, 'b> Vertex<'a, 'b> {
 
     pub fn create_manifold_vertex(
         id: usize,
-        manifold: Rc<Manifold>,
-        kdtree: &'a Box<dyn NearestNeighbourIndex<f64> + 'b>,
-        is_ref_mode: bool
+        manifold: Rc<&'a Manifold>,
+        kdtree: Option<&'a Box<dyn NearestNeighbourIndex<f64> + 'b>>
     ) -> Self {
         let fn_val = manifold.values[id];
         Vertex {
@@ -69,8 +67,7 @@ impl<'a, 'b> Vertex<'a, 'b> {
             fn_val,
             vtype: VertexType::Manifold(ManifoldVertexInfo { 
                 manifold,
-                kdtree,
-                is_ref_mode
+                kdtree
             }) 
         }
     }
@@ -95,8 +92,7 @@ impl<'a, 'b> Vertex<'a, 'b> {
                     let nv = Self::create_manifold_vertex(
                         neighbor,
                         vert_info.manifold.clone(),
-                        vert_info.kdtree,
-                        vert_info.is_ref_mode
+                        vert_info.kdtree
                     );
                     neighbors.push(nv);
                 }

@@ -53,23 +53,24 @@ struct VtkExtGraphType {
     neighbor_idx_set: Rc<Vec<Vec<i8>>>
 }
 
-struct ManifoldExtGraphType {
-    volume: Rc<Manifold>,
+struct ManifoldExtGraphType<'a> {
+    volume: Rc<&'a Manifold>,
+    data: Option<&'a Array2<f64>>
 }
 
-enum ExtGraphImpl {
+enum ExtGraphImpl<'a> {
     Vtk(VtkExtGraphType),
-    Manifold(ManifoldExtGraphType)
+    Manifold(ManifoldExtGraphType<'a>)
 }
 
-struct ExtGraph {
-    ext_type: ExtGraphImpl,
+struct ExtGraph<'a> {
+    ext_type: ExtGraphImpl<'a>,
     graph: RefCell<Graph>,
     cache: RefCell<HashMap<usize, CriticalPointType>>,
     rng: RefCell<ThreadRng>
 }
 
-impl ExtGraph {
+impl<'a> ExtGraph<'a> {
     fn new_with_vtk(volume: VtkVolume) -> Self {
         let rng = rand::thread_rng();
         let neighbor_idx_set = Rc::new(Self::generate_neighbor_idx_set(&volume));
@@ -86,12 +87,13 @@ impl ExtGraph {
         }
     }
 
-    fn new_with_manifold(volume: Manifold) -> Self {
+    fn new_with_manifold(volume: &'a Manifold, data: Option<&'a Array2<f64>>) -> Self {
         let rng = rand::thread_rng();
         ExtGraph {
             ext_type: ExtGraphImpl::Manifold(
                 ManifoldExtGraphType { 
-                    volume: Rc::new(volume)
+                    volume: Rc::new(volume),
+                    data
                 }
             ),
             graph: RefCell::new(Graph::new()),
@@ -100,18 +102,8 @@ impl ExtGraph {
         }
     }
 
-    fn init_data_array(volume: &Manifold) -> Array2<f64> {
-        let n = volume.vertices.len();
-        let d = volume.embedding_dim;
 
-        let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
-
-        let data = Array2::from_shape_vec((n, d), flat).unwrap(); 
-
-        data
-    }
-
-    fn fetch_kd_tree<'a>(data: &'a Array2<f64>) -> Box<dyn NearestNeighbourIndex<f64> + 'a> {
+    fn fetch_kd_tree<'b>(data: &'b Array2<f64>) -> Box<dyn NearestNeighbourIndex<f64> + 'b> {
         CommonNearestNeighbour::KdTree
             .from_batch(data, L2Dist)
             .unwrap()
@@ -397,16 +389,19 @@ impl ExtGraph {
                 }
             },
             ExtGraphImpl::Manifold(manifold_info) => {
-                let data=  Self::init_data_array(&manifold_info.volume);
-                let nn = Self::fetch_kd_tree(&data);
+                let nn = if let Some(data) = manifold_info.data {
+                    Some(Self::fetch_kd_tree(data))
+                }
+                else {
+                    None
+                };
                 
                 // 1st pass: Point classification
                 for id in 0..manifold_info.volume.vertices.len() {
                     let cur = Vertex::create_manifold_vertex(
                         id,
                         manifold_info.volume.clone(),
-                        &nn,
-                        true
+                        nn.as_ref()
                     );
 
                     self.classify_point(&cur);
@@ -434,6 +429,17 @@ fn get_critical_points(graph: &Graph) -> [usize; 2] {
     [maxima, saddles]    
 }
 
+fn init_data_array(volume: &Manifold) -> Array2<f64> {
+    let n = volume.vertices.len();
+    let d = volume.embedding_dim;
+
+    let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
+
+    let data = Array2::from_shape_vec((n, d), flat).unwrap(); 
+
+    data
+}
+
 fn process_vtk_file(path: &str) -> Result<Graph, String> {
     let volume = read_vtk(path)?;
     
@@ -453,13 +459,17 @@ fn process_vtk_file(path: &str) -> Result<Graph, String> {
 fn process_man_file(path: &str) -> Result<Graph, String> {
     let volume =  read_manifold(path)?;
     let total_points = volume.vertices.len();
-    let mut graph = ExtGraph::new_with_manifold(volume);
-    graph.compute();
+    let mut graph_ref = ExtGraph::new_with_manifold(&volume, None);
+    graph_ref.compute();
 
-    let [total_maxima, total_saddles] = get_critical_points(&graph.graph.borrow());
+    let data = init_data_array(&volume);
+    let mut graph_real = ExtGraph::new_with_manifold(&volume, Some(&data));
+    graph_real.compute();
+
+    let [total_maxima, total_saddles] = get_critical_points(&graph_real.graph.borrow());
     println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
-    Ok(graph.graph.into_inner())
+    Ok(graph_real.graph.into_inner())
 }
 
 #[tauri::command]
