@@ -55,6 +55,10 @@ img {
   border-style: solid;
 }
 
+button:disabled {
+  pointer-events: none;
+  opacity: 0.5;
+}
 
 /* We set position: absolute here in order to put the overlay element over the navbar so that it can be blurred */
 /* Not really necessary since we disable buttons during load. */

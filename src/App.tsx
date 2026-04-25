@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type {Graph, Stats} from './Types.ts'
-import { getGraphData, fetchData } from "./UI.ts";
+import { invoke } from "@tauri-apps/api/core";
+import { getGraphData, fetchData, fetchMemoryFormattedString, fetchLastGraph } from "./UI.ts";
 import file_open_img from './assets/file-open.png';
 import reset_img from './assets/reset.png';
+import show_img from './assets/show.png';
+import hide_img from './assets/hide.png';
 import ForceGraph3D from "react-force-graph-3d";
 
 export default function App() {
@@ -15,6 +18,9 @@ export default function App() {
                               accuracy: 0
                             });
 
+  
+  const [disabled, setDisabled] = useState<boolean>(true);
+  const [extImg, setExtImg] = useState<string>(show_img);
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -73,6 +79,28 @@ export default function App() {
         memory: result.memory,
         accuracy: result.accuracy
       })
+      setDisabled(result.is_vtk);
+    }
+    catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleGraphToggle = async () => {
+    if (!isValidClick()) return;
+
+    if (extImg == show_img) {
+      await invoke("set_graph_mode", {showTrueGraph: true});
+      setExtImg(hide_img);
+    }
+    else {
+      await invoke("set_graph_mode", {showTrueGraph: false});
+      setExtImg(show_img);
+    }
+
+    try {
+      let result = await fetchLastGraph();
+      setGraph(result);
     }
     catch (err) {
       console.error(err);
@@ -82,11 +110,14 @@ export default function App() {
   return (
     <div className="main-container">
       <div className="navbar">
-        <button onClick={handleOpenFile}>
+        <button onClick={handleOpenFile} title="Open file">
           <img src={file_open_img} alt="Open File"></img>
         </button>
-        <button onClick={handleRecenter}>
+        <button onClick={handleRecenter} title="Reset camera">
           <img src={reset_img} alt="Recenter"></img>
+        </button>
+        <button onClick={handleGraphToggle} disabled={disabled} title="Toggle true extremum graph">
+          <img src={extImg} alt="Show true extremum graph"></img>
         </button>
       </div>
 
@@ -113,7 +144,7 @@ export default function App() {
           <div className="overlay-text">
             <center>Stats</center>
             Time: {stats.time.toFixed(2)}ms<br/>
-            Memory: {stats.memory.toFixed(2)}KB<br/>
+            Memory: {fetchMemoryFormattedString(stats.memory)}<br/>
             Accuracy: {stats.accuracy.toFixed(2)}%<br/>
           </div>
         </div>

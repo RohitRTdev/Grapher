@@ -1,6 +1,6 @@
 use serde::{Serialize};
 use crate::{manifold::*, vertex::*, vtk::*, similarity::*};
-use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc};
+use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc, sync::{Mutex, atomic::{AtomicBool, Ordering}}};
 use rand::{rngs::ThreadRng, Rng};
 use std::time::Instant;
 
@@ -8,7 +8,9 @@ const SIMPLICITY_RANDOMNESS: f64 = 0.6;
 pub const MAXIMA: u8 = 0;
 pub const SADDLE: u8 = 1;
 
-pub type SaddleCache = HashMap<usize, Vec<f64>>;
+static RETRIEVE_REF_GRAPH: AtomicBool = AtomicBool::new(false);
+static LAST_GRAPH: Mutex<(Graph, Graph)> = Mutex::new((Graph::new(), Graph::new()));
+pub type SaddleCache = HashMap<usize, (f64, Vec<f64>)>;
 
 #[derive(Serialize, Clone)]
 pub struct Node {
@@ -20,13 +22,13 @@ pub struct Node {
     z: f64
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Edge {
     pub source: usize,
     pub target: usize,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct Graph {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
@@ -36,12 +38,13 @@ pub struct Graph {
 pub struct FinalResult {
     graph: Graph,
     time: f64,
-    memory: f64,
-    accuracy: f64
+    memory: usize,
+    accuracy: f64,
+    is_vtk: bool
 }
 
 impl Graph {
-    fn new() -> Self {
+    const fn new() -> Self {
         Graph {
             nodes: vec![],
             edges: vec![]
@@ -54,7 +57,7 @@ impl Graph {
 
 #[derive(Debug, PartialEq)]
 enum CriticalPointType {
-    Saddle(Vec<usize>),
+    Saddle((f64, Vec<usize>)),
     Other(Option<usize>),
     Maxima(f64)
 }
@@ -190,7 +193,7 @@ impl<'a> ExtGraph<'a> {
                 }
                 vertices.push(chosen_vertex.id);
             } 
-            CriticalPointType::Saddle(vertices)
+            CriticalPointType::Saddle((fv, vertices))
         } 
         else if upper_link.len() == 0 {
             color_code = MAXIMA;
@@ -298,7 +301,7 @@ impl<'a> ExtGraph<'a> {
                     },
                     /* Ideally, we must not hit a saddle since we're traversing from d-1 saddles */
                     /* However, I'm still keeping this here for safety */
-                    CriticalPointType::Saddle(vertices) => {
+                    CriticalPointType::Saddle((_, vertices)) => {
                         for vert in vertices {
                             work_queue.push_back(*vert);
                         }
@@ -324,7 +327,7 @@ impl<'a> ExtGraph<'a> {
     fn gradient_ascent(&mut self) {
         for (&vertex_id, vertex_type) in self.cache.borrow().iter() {
             match vertex_type {
-                CriticalPointType::Saddle(gradients) => {
+                CriticalPointType::Saddle((saddle_val, gradients)) => {
                     let targets = self.path_traverse(gradients);
 
                     targets.iter().for_each(|(target, _)| {
@@ -335,14 +338,12 @@ impl<'a> ExtGraph<'a> {
                         });
                     });
 
-                    if targets.len() >= 1 {
-                        // Store all the reachable maxima values from this saddle in the cache 
-                        self.neighbors.borrow_mut()
-                        .insert(vertex_id, targets.iter()
-                        .map(|(_, fn_val)| 
-                        {*fn_val})
-                        .collect());
-                    }
+                    // Store all the reachable maxima values from this saddle in the cache 
+                    self.neighbors.borrow_mut()
+                    .insert(vertex_id, (*saddle_val, targets.iter()
+                    .map(|(_, fn_val)| 
+                    {*fn_val})
+                    .collect()));
                 },
                 _ => {}
             }
@@ -466,8 +467,9 @@ fn process_vtk_file(path: &str) -> Result<FinalResult, String> {
     let res = FinalResult {
         graph: graph.graph.into_inner(),
         time,
-        memory: 0.0,
-        accuracy: 100.0
+        memory: 0,
+        accuracy: 100.0,
+        is_vtk: true
     };
 
     Ok(res)
@@ -490,21 +492,30 @@ fn process_man_file(path: &str) -> Result<FinalResult, String> {
         memory += neighbor.len() * size_of::<usize>();
     });
 
-    let graph1 = graph_ref.graph.into_inner();
-    let graph2 = graph_real.graph.into_inner();
     let graph1_cache = graph_ref.neighbors.into_inner();
     let graph2_cache = graph_real.neighbors.into_inner();
 
-    let accuracy = get_accuracy(&graph1, graph1_cache, &graph2, graph2_cache);
-
-    let [total_maxima, total_saddles] = get_critical_points(&graph2);
+    let accuracy = get_accuracy(graph1_cache, graph2_cache);
+    let [total_maxima, total_saddles] = get_critical_points(&graph_real.graph.borrow());
     println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
+    let graph1 = graph_ref.graph.borrow().clone();
+    let graph2= graph_real.graph.borrow().clone();
+    let final_graph = if RETRIEVE_REF_GRAPH.load(Ordering::Relaxed) {
+        graph_ref.graph.into_inner()
+    }
+    else {
+        graph_real.graph.into_inner()
+    };
+
+    *LAST_GRAPH.lock().unwrap() = (graph1, graph2);
+
     let res = FinalResult {
-        graph: graph2,
+        graph: final_graph,
         time,
-        memory: memory as f64 / 1024.0,
-        accuracy
+        memory,
+        accuracy,
+        is_vtk: false
     };
 
     Ok(res)
@@ -522,3 +533,22 @@ pub async fn process_file_async(path: String) -> Result<FinalResult, String> {
     })
     .await.expect("Unexpected tokio error!!")
 }
+
+#[tauri::command]
+pub fn retrieve_last_graph() -> Graph {
+    let container = LAST_GRAPH.lock().unwrap();
+    let graph = if RETRIEVE_REF_GRAPH.load(Ordering::Relaxed) {
+        container.0.clone()
+    }
+    else {
+        container.1.clone()
+    };
+
+    graph
+}
+
+#[tauri::command]
+pub fn set_graph_mode(show_true_graph: bool) {
+    RETRIEVE_REF_GRAPH.store(show_true_graph, Ordering::Relaxed);
+}
+

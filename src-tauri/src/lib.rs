@@ -9,7 +9,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init()) 
-        .invoke_handler(tauri::generate_handler![graph::process_file_async])
+        .invoke_handler(tauri::generate_handler![
+            graph::process_file_async,
+            graph::retrieve_last_graph,
+            graph::set_graph_mode
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

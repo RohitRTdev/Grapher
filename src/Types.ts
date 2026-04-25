@@ -28,5 +28,6 @@ export type FinalResult = {
   time: number;
   memory: number;
   accuracy: number;
+  is_vtk: boolean;
 };
 

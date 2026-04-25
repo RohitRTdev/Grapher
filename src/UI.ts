@@ -3,7 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { invoke } from "@tauri-apps/api/core";
 
 export function getGraphData(graph: Graph) {
-    console.log(graph);
     return {
       nodes: graph.nodes.map(e => ({
         id: e.id,
@@ -39,6 +38,7 @@ export async function fetchData(loadCallback: (start: boolean) => void) : Promis
         path: selected
         });
 
+        console.log(result);
         return result;
     } catch (err) {
         console.error(err);
@@ -47,4 +47,38 @@ export async function fetchData(loadCallback: (start: boolean) => void) : Promis
     }
 
     throw new Error("Failed to fetch graph data!");
+}
+
+export async function fetchLastGraph() : Promise<Graph> {
+    try {
+        const result = await invoke<Graph>("retrieve_last_graph");
+        return result;
+    } catch (err) {
+        console.error(err);
+    } 
+
+    throw new Error("Failed to fetch previous graph data!");
+}
+
+export function fetchMemoryFormattedString(memory: number) : string {
+    let divFactor = 1;
+    let suffix = "B";
+
+    if (memory >= 1024 * 1024 * 1024) {
+        divFactor = 1024 * 1024 * 1024;
+        suffix = "GiB";
+    } 
+    else if (memory >= 1024 * 1024) {
+        divFactor = 1024 * 1024;
+        suffix = "MiB";
+    }
+    else if (memory >= 1024) {
+        divFactor = 1024;
+        suffix = "KiB";
+    }
+    else {
+        return memory + suffix;
+    }
+
+    return (memory / divFactor).toFixed(2) + suffix
 }
