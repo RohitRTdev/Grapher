@@ -12,7 +12,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             graph::process_file_async,
             graph::retrieve_last_graph,
-            graph::set_graph_mode
+            graph::set_graph_mode,
+            graph::recompute_graph,
+            vertex::set_k
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

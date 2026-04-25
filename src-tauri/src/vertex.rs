@@ -1,9 +1,9 @@
 use ndarray::{ArrayView1, Array2};
 use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, distance::L2Dist};
-use std::{collections::HashSet, rc::Rc};
+use std::{collections::HashSet, rc::Rc, sync::atomic::{AtomicUsize, Ordering}};
 use crate::{manifold::*, vtk::VtkVolume};
 
-const KNN: usize = 10;
+const KNN: AtomicUsize = AtomicUsize::new(10);
 
 struct VtkVertexInfo {
     iv: Vec<usize>,
@@ -186,7 +186,7 @@ impl NN {
     pub fn build_neighborhood(&mut self, volume: &Manifold) {
         let n = volume.vertices.len();
         let d = volume.embedding_dim;
-
+        let k = KNN.load(Ordering::Relaxed);
         self.neighbor_info.neighbors = vec![HashSet::new(); n];
 
         let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
@@ -203,7 +203,7 @@ impl NN {
             let query = ArrayView1::from(point.as_slice());
             
             // Use KNN to find the neighbors when we don't have the neighborhood information
-            let result = kdtree.k_nearest(query, KNN).unwrap();
+            let result = kdtree.k_nearest(query, k).unwrap();
             
             result.iter()
             .filter(|(_, idx)| {
@@ -215,4 +215,9 @@ impl NN {
             });
         }
     }
+}
+
+#[tauri::command]
+pub fn set_k(k: usize) {
+    KNN.store(k, Ordering::Relaxed);
 }

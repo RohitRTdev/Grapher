@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useMemo } from "react";
-import type {Graph, Stats} from './Types.ts'
+import type {Graph, Stats, FinalResult} from './Types.ts'
 import { invoke } from "@tauri-apps/api/core";
 import { getGraphData, fetchData, fetchMemoryFormattedString, fetchLastGraph } from "./UI.ts";
 import file_open_img from './assets/file-open.png';
 import reset_img from './assets/reset.png';
 import show_img from './assets/show.png';
 import hide_img from './assets/hide.png';
+import plus_img from './assets/plus.png';
+import minus_img from './assets/minus.png';
 import ForceGraph3D from "react-force-graph-3d";
 
 export default function App() {
@@ -21,6 +23,7 @@ export default function App() {
   
   const [disabled, setDisabled] = useState<boolean>(true);
   const [extImg, setExtImg] = useState<string>(show_img);
+  const [K, setK] = useState<number>(10);
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -107,6 +110,43 @@ export default function App() {
     }
   };
 
+  const handleIncDecCommon = async (new_k: number) => {
+    try {
+      await invoke("set_k", {k: new_k});
+      setLoading(true);
+      let result = await invoke<FinalResult>("recompute_graph");
+      setLoading(false);
+
+      console.log(result);
+      setGraph(result.graph);
+      setStats({
+        time: result.time, 
+        memory: result.memory,
+        accuracy: result.accuracy
+      })
+    }
+    catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleIncrement = async () => {
+    if (!isValidClick) return;
+    if (K < 100) {
+      await handleIncDecCommon(K + 10);
+      setK(K + 10);
+    }
+  };
+
+  const handleDecrement = async () => {
+    if (!isValidClick) return;
+    if (K > 10) {
+      await handleIncDecCommon(K - 10);
+      setK(K - 10);
+    }
+  };
+
+
   return (
     <div className="main-container">
       <div className="navbar">
@@ -118,6 +158,12 @@ export default function App() {
         </button>
         <button onClick={handleGraphToggle} disabled={disabled} title="Toggle true extremum graph">
           <img src={extImg} alt="Show true extremum graph"></img>
+        </button>
+        <button onClick={handleIncrement} disabled={disabled || K >= 100} title="Increment K">
+          <img src={plus_img}></img>
+        </button>
+        <button onClick={handleDecrement} disabled={disabled || K <= 10} title="Decrement K">
+          <img src={minus_img}></img>
         </button>
       </div>
 
@@ -143,6 +189,7 @@ export default function App() {
           )}
           <div className="overlay-text">
             <center>Stats</center>
+            KNN: {K}<br/>
             Time: {stats.time.toFixed(2)}ms<br/>
             Memory: {fetchMemoryFormattedString(stats.memory)}<br/>
             Accuracy: {stats.accuracy.toFixed(2)}%<br/>

@@ -9,8 +9,31 @@ pub const MAXIMA: u8 = 0;
 pub const SADDLE: u8 = 1;
 
 static RETRIEVE_REF_GRAPH: AtomicBool = AtomicBool::new(false);
-static LAST_GRAPH: Mutex<(Graph, Graph)> = Mutex::new((Graph::new(), Graph::new()));
+static LAST_GRAPH: Mutex<GraphInfo> = Mutex::new(GraphInfo::new());
 pub type SaddleCache = HashMap<usize, (f64, Vec<f64>)>;
+
+struct GraphInfo {
+    manifold: Manifold,
+    graph_ref: Graph,
+    graph_real: Graph
+}
+
+impl GraphInfo {
+    const fn new() -> Self {
+        Self {
+            manifold: Manifold {
+                embedding_dim: 0,
+                vertices: Vec::new(),
+                values: Vec::new(),
+                graph: AdjList {
+                    neighbors: Vec::new()
+                }
+            },
+            graph_ref: Graph::new(),
+            graph_real: Graph::new()
+        }
+    }
+}
 
 #[derive(Serialize, Clone)]
 pub struct Node {
@@ -472,16 +495,25 @@ fn process_vtk_file(path: &str) -> Result<FinalResult, String> {
         is_vtk: true
     };
 
+    *LAST_GRAPH.lock().unwrap() = GraphInfo::new();
+
     Ok(res)
 }
 
-fn process_man_file(path: &str) -> Result<FinalResult, String> {
-    let volume =  read_manifold(path)?;
+fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
+    if path.is_some() {
+        let man = read_manifold(path.unwrap())?;
+        LAST_GRAPH.lock().unwrap().manifold = man;
+    }
+
+    let mut guard = LAST_GRAPH.lock().unwrap();
+    let volume = &guard.manifold;
+
     let total_points = volume.vertices.len();
-    let mut graph_ref = ExtGraph::new_with_manifold(&volume, true);
+    let mut graph_ref = ExtGraph::new_with_manifold(volume, true);
     graph_ref.compute();
 
-    let mut graph_real = ExtGraph::new_with_manifold(&volume, false);
+    let mut graph_real = ExtGraph::new_with_manifold(volume, false);
 
     let start = Instant::now();
     graph_real.compute();
@@ -508,7 +540,8 @@ fn process_man_file(path: &str) -> Result<FinalResult, String> {
         graph_real.graph.into_inner()
     };
 
-    *LAST_GRAPH.lock().unwrap() = (graph1, graph2);
+    guard.graph_ref = graph1;
+    guard.graph_real = graph2;
 
     let res = FinalResult {
         graph: final_graph,
@@ -528,7 +561,7 @@ pub async fn process_file_async(path: String) -> Result<FinalResult, String> {
             process_vtk_file(&path)
         }
         else {
-            process_man_file(&path)
+            process_man_file(Some(&path))
         }
     })
     .await.expect("Unexpected tokio error!!")
@@ -538,13 +571,21 @@ pub async fn process_file_async(path: String) -> Result<FinalResult, String> {
 pub fn retrieve_last_graph() -> Graph {
     let container = LAST_GRAPH.lock().unwrap();
     let graph = if RETRIEVE_REF_GRAPH.load(Ordering::Relaxed) {
-        container.0.clone()
+        container.graph_ref.clone()
     }
     else {
-        container.1.clone()
+        container.graph_real.clone()
     };
 
     graph
+}
+
+#[tauri::command]
+pub async fn recompute_graph() -> Result<FinalResult, String> {
+    tokio::task::spawn_blocking(move || {
+        process_man_file(None)
+    })
+    .await.expect("Unexpected tokio error!!")
 }
 
 #[tauri::command]

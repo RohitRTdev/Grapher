@@ -55,3 +55,4 @@ pub fn get_accuracy(graph1_cache: SaddleCache, graph2_cache: SaddleCache) -> f64
     println!("Distance computation: {}s", start.elapsed().as_secs_f64());
     (1.0 / (1.0 + dist)) * 100.0
 }
+
