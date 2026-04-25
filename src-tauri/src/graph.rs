@@ -10,7 +10,6 @@ pub const SADDLE: u8 = 1;
 
 static RETRIEVE_REF_GRAPH: AtomicBool = AtomicBool::new(false);
 static LAST_GRAPH: Mutex<GraphInfo> = Mutex::new(GraphInfo::new());
-pub type SaddleCache = HashMap<usize, (f64, Vec<f64>)>;
 
 struct GraphInfo {
     manifold: Manifold,
@@ -80,9 +79,9 @@ impl Graph {
 
 #[derive(Debug, PartialEq)]
 enum CriticalPointType {
-    Saddle((f64, Vec<usize>)),
+    Saddle(Vec<usize>),
     Other(Option<usize>),
-    Maxima(f64)
+    Maxima
 }
 
 struct VtkExtGraphType {
@@ -103,7 +102,6 @@ enum ExtGraphImpl<'a> {
 struct ExtGraph<'a> {
     ext_type: ExtGraphImpl<'a>,
     graph: RefCell<Graph>,
-    neighbors: RefCell<SaddleCache>,
     cache: RefCell<HashMap<usize, CriticalPointType>>,
     rng: RefCell<ThreadRng>
 }
@@ -120,7 +118,6 @@ impl<'a> ExtGraph<'a> {
                 }
             ),
             graph: RefCell::new(Graph::new()),
-            neighbors: RefCell::new(HashMap::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng)
         }
@@ -145,7 +142,6 @@ impl<'a> ExtGraph<'a> {
                 }
             ),
             graph: RefCell::new(Graph::new()),
-            neighbors: RefCell::new(HashMap::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng)
         }
@@ -216,11 +212,11 @@ impl<'a> ExtGraph<'a> {
                 }
                 vertices.push(chosen_vertex.id);
             } 
-            CriticalPointType::Saddle((fv, vertices))
+            CriticalPointType::Saddle(vertices)
         } 
         else if upper_link.len() == 0 {
             color_code = MAXIMA;
-            CriticalPointType::Maxima(fv)
+            CriticalPointType::Maxima
         }   
         else {
            CriticalPointType::Other(highest_vertex_id) 
@@ -228,7 +224,7 @@ impl<'a> ExtGraph<'a> {
 
         // Include d-1 saddles and maxima in the graph
         match &pt_type {
-            CriticalPointType::Saddle(_) | CriticalPointType::Maxima(_) => {
+            CriticalPointType::Saddle(_) | CriticalPointType::Maxima => {
                 let vertex = cur.get_vertex();
                 
                 // If 2d case, then just augment 3rd dimension as 0
@@ -300,8 +296,8 @@ impl<'a> ExtGraph<'a> {
 
     // Follow the gradient until we hit a maxima or boundary
     // Here, we will do an iterative approach
-    fn path_traverse(&self, gradients: &Vec<usize>) -> HashMap<usize, f64> {
-        let mut reachable_maxima: HashMap<usize, f64> = HashMap::new();
+    fn path_traverse(&self, gradients: &Vec<usize>) -> HashSet<usize> {
+        let mut reachable_maxima = HashSet::new();
         let mut work_queue = VecDeque::new();
         gradients.iter().for_each(|&item| {
             work_queue.push_back(item);
@@ -318,13 +314,13 @@ impl<'a> ExtGraph<'a> {
 
             if let Some(vertex) = self.cache.borrow().get(&cur) {
                 match vertex {
-                    CriticalPointType::Maxima(val) => {
+                    CriticalPointType::Maxima => {
                         // We have reached a maxima, stop traversal along this path
-                        reachable_maxima.insert(cur, *val);
+                        reachable_maxima.insert(cur);
                     },
                     /* Ideally, we must not hit a saddle since we're traversing from d-1 saddles */
                     /* However, I'm still keeping this here for safety */
-                    CriticalPointType::Saddle((_, vertices)) => {
+                    CriticalPointType::Saddle(vertices) => {
                         for vert in vertices {
                             work_queue.push_back(*vert);
                         }
@@ -350,23 +346,16 @@ impl<'a> ExtGraph<'a> {
     fn gradient_ascent(&mut self) {
         for (&vertex_id, vertex_type) in self.cache.borrow().iter() {
             match vertex_type {
-                CriticalPointType::Saddle((saddle_val, gradients)) => {
+                CriticalPointType::Saddle(gradients) => {
                     let targets = self.path_traverse(gradients);
 
-                    targets.iter().for_each(|(target, _)| {
+                    targets.iter().for_each(|target| {
                         // Add an edge from this saddle to every maxima reachable from this saddle
                         self.graph.borrow_mut().edges.push(Edge {
                             source: vertex_id,
                             target: *target
                         });
                     });
-
-                    // Store all the reachable maxima values from this saddle in the cache 
-                    self.neighbors.borrow_mut()
-                    .insert(vertex_id, (*saddle_val, targets.iter()
-                    .map(|(_, fn_val)| 
-                    {*fn_val})
-                    .collect()));
                 },
                 _ => {}
             }
@@ -524,15 +513,13 @@ fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
         memory += neighbor.len() * size_of::<usize>();
     });
 
-    let graph1_cache = graph_ref.neighbors.into_inner();
-    let graph2_cache = graph_real.neighbors.into_inner();
-
-    let accuracy = get_accuracy(graph1_cache, graph2_cache);
-    let [total_maxima, total_saddles] = get_critical_points(&graph_real.graph.borrow());
-    println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
-
     let graph1 = graph_ref.graph.borrow().clone();
     let graph2= graph_real.graph.borrow().clone();
+    let accuracy = get_accuracy(&graph1, &graph2);
+
+    let [total_maxima, total_saddles] = get_critical_points(&graph2);
+    println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
+
     let final_graph = if RETRIEVE_REF_GRAPH.load(Ordering::Relaxed) {
         graph_ref.graph.into_inner()
     }
