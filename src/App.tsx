@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from "react";
 import type {Graph, Stats, FinalResult} from './Types.ts'
 import { invoke } from "@tauri-apps/api/core";
-import { getGraphData, fetchData, fetchMemoryFormattedString, fetchLastGraph } from "./UI.ts";
+import { getGraphData, fetchData, fetchMemoryFormattedString, fetchTimeFormattedString, fetchLastGraph } from "./UI.ts";
 import file_open_img from './assets/file-open.png';
 import reset_img from './assets/reset.png';
 import show_img from './assets/show.png';
@@ -190,7 +190,7 @@ export default function App() {
           <div className="overlay-text">
             <center>Stats</center>
             KNN: {K}<br/>
-            Time: {stats.time.toFixed(2)}ms<br/>
+            Time: {fetchTimeFormattedString(stats.time)}<br/>
             Memory: {fetchMemoryFormattedString(stats.memory)}<br/>
             Accuracy: {stats.accuracy.toFixed(2)}%<br/>
           </div>

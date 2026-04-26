@@ -2,11 +2,16 @@ use serde::{Serialize};
 use crate::{manifold::*, vertex::*, vtk::*, similarity::*};
 use std::{cell::RefCell, collections::{HashMap, HashSet, VecDeque}, rc::Rc, sync::{Mutex, atomic::{AtomicBool, Ordering}}};
 use rand::{rngs::ThreadRng, Rng};
+use cubecl::wgpu::WgpuRuntime;
+use fast_umap::prelude::*;
 use std::time::Instant;
 
 const SIMPLICITY_RANDOMNESS: f64 = 0.6;
 pub const MAXIMA: u8 = 0;
 pub const SADDLE: u8 = 1;
+
+type MyBackend = burn::backend::wgpu::CubeBackend<WgpuRuntime, f32, i32, u32>;
+type MyAutodiffBackend = burn::backend::Autodiff<MyBackend>;
 
 static RETRIEVE_REF_GRAPH: AtomicBool = AtomicBool::new(false);
 static LAST_GRAPH: Mutex<GraphInfo> = Mutex::new(GraphInfo::new());
@@ -75,8 +80,6 @@ impl Graph {
 }
 
 
-
-
 #[derive(Debug, PartialEq)]
 enum CriticalPointType {
     Saddle(Vec<usize>),
@@ -103,7 +106,8 @@ struct ExtGraph<'a> {
     ext_type: ExtGraphImpl<'a>,
     graph: RefCell<Graph>,
     cache: RefCell<HashMap<usize, CriticalPointType>>,
-    rng: RefCell<ThreadRng>
+    rng: RefCell<ThreadRng>,
+    vertices: RefCell<Vec<Vec<f64>>>
 }
 
 impl<'a> ExtGraph<'a> {
@@ -119,7 +123,8 @@ impl<'a> ExtGraph<'a> {
             ),
             graph: RefCell::new(Graph::new()),
             cache: RefCell::new(HashMap::new()),
-            rng: RefCell::new(rng)
+            rng: RefCell::new(rng),
+            vertices: RefCell::new(Vec::new())
         }
     }
 
@@ -143,12 +148,12 @@ impl<'a> ExtGraph<'a> {
             ),
             graph: RefCell::new(Graph::new()),
             cache: RefCell::new(HashMap::new()),
-            rng: RefCell::new(rng)
+            rng: RefCell::new(rng),
+            vertices: RefCell::new(Vec::new())
         }
     }
 
-    fn classify_point(&self, cur: &Vertex) {
-        
+    fn classify_point(&self, cur: &Vertex, is_ref_mode: bool) {
         let mut upper_link: HashMap<usize, Vec<Vertex>> = HashMap::new();
     
         let fv = cur.fn_val;
@@ -162,7 +167,7 @@ impl<'a> ExtGraph<'a> {
             
             // We only care about the upper link
             // A basic implementation of simulation of simplicity
-            if fnv > fv || (fnv == fv && self.rng.borrow_mut().gen_bool(SIMPLICITY_RANDOMNESS)) {
+            if fnv > fv || (fnv == fv && self.rng.borrow_mut().gen_bool(SIMPLICITY_RANDOMNESS) && !is_ref_mode) {
                 // Keep track of the highest neighbor
                 if fnv > highest_vertex_val {
                     highest_vertex_val = fnv;
@@ -243,8 +248,12 @@ impl<'a> ExtGraph<'a> {
                     y: vertex[1],
                     z 
                 };
-                
+
                 self.graph.borrow_mut().nodes.push(node);
+                
+                if vertex.len() > 3{
+                    self.vertices.borrow_mut().push(vertex); 
+                }
             },
             _ => {}
         }
@@ -399,7 +408,7 @@ impl<'a> ExtGraph<'a> {
     }
 
     fn compute(&mut self) {
-        match &self.ext_type {
+        let dims = match &self.ext_type {
             ExtGraphImpl::Vtk(vtk_info) => {
                 let num_dims = vtk_info.volume.dims.len(); 
 
@@ -419,10 +428,12 @@ impl<'a> ExtGraph<'a> {
                         vtk_info.neighbor_idx_set.clone()
                     );
 
-                    self.classify_point(&cur);
+                    self.classify_point(&cur, false);
 
                     do_work = self.update_iv(&mut iv);
                 }
+
+                num_dims
             },
             ExtGraphImpl::Manifold(manifold_info) => {
                 // 1st pass: Point classification
@@ -435,13 +446,35 @@ impl<'a> ExtGraph<'a> {
                         })
                     );
 
-                    self.classify_point(&cur);
+                    self.classify_point(&cur, !manifold_info.kdtree.is_some());
                 }
+
+                manifold_info.volume.embedding_dim
             }
-        }
+        };
 
         // 2nd pass: Gradient arc computation
         self.gradient_ascent();
+
+
+        // Project vertices to lower dimensions
+        if dims > 3 {
+            let config = UmapConfig {
+                n_components: 3,
+                ..UmapConfig::default()
+            };
+            let umap = fast_umap::Umap::<MyAutodiffBackend>::new(config);
+            let fitted = umap.fit(self.vertices.borrow().clone(), None);
+
+            // Get embedding
+            let embeddings = fitted.embedding(); 
+            
+            for (node, node_3d) in self.graph.borrow_mut().nodes.iter_mut().zip(embeddings.iter()) {
+                node.x = node_3d[0];
+                node.y = node_3d[1];
+                node.z = node_3d[2];
+            }
+        }
     }
 }
 

@@ -82,3 +82,14 @@ export function fetchMemoryFormattedString(memory: number) : string {
 
     return (memory / divFactor).toFixed(2) + suffix
 }
+
+export function fetchTimeFormattedString(time: number) : string {
+    let newTime = time;
+    let suffix = "ms";
+    if (time >= 1000) {
+        newTime = time / 1000;
+        suffix = "s"; 
+    }
+
+    return newTime.toFixed(2) + suffix;
+}

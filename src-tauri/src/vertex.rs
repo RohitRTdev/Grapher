@@ -3,7 +3,7 @@ use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, distance::L2Dist};
 use std::{collections::HashSet, rc::Rc, sync::atomic::{AtomicUsize, Ordering}};
 use crate::{manifold::*, vtk::VtkVolume};
 
-const KNN: AtomicUsize = AtomicUsize::new(10);
+static KNN: AtomicUsize = AtomicUsize::new(10);
 
 struct VtkVertexInfo {
     iv: Vec<usize>,
