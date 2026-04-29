@@ -14,10 +14,16 @@ type MyBackend = burn::backend::wgpu::CubeBackend<WgpuRuntime, f32, i32, u32>;
 type MyAutodiffBackend = burn::backend::Autodiff<MyBackend>;
 
 static RETRIEVE_REF_GRAPH: AtomicBool = AtomicBool::new(false);
+static IS_MAX_GRAPH: AtomicBool = AtomicBool::new(true);
 static LAST_GRAPH: Mutex<GraphInfo> = Mutex::new(GraphInfo::new());
 
+enum ProcessType {
+    Manifold(Manifold),
+    Vtk(VtkVolume)
+}
+
 struct GraphInfo {
-    manifold: Manifold,
+    info: ProcessType,
     graph_ref: Graph,
     graph_real: Graph
 }
@@ -25,14 +31,15 @@ struct GraphInfo {
 impl GraphInfo {
     const fn new() -> Self {
         Self {
-            manifold: Manifold {
+            info: ProcessType::Manifold (
+            Manifold {
                 embedding_dim: 0,
                 vertices: Vec::new(),
                 values: Vec::new(),
                 graph: AdjList {
                     neighbors: Vec::new()
                 }
-            },
+            }),
             graph_ref: Graph::new(),
             graph_real: Graph::new()
         }
@@ -88,8 +95,8 @@ enum CriticalPointType {
     Maxima
 }
 
-struct VtkExtGraphType {
-    volume: Rc<VtkVolume>,
+struct VtkExtGraphType<'a> {
+    volume: Rc<&'a VtkVolume>,
     neighbor_idx_set: Rc<Vec<Vec<i8>>>
 }
 
@@ -99,7 +106,7 @@ struct ManifoldExtGraphType<'a> {
 }
 
 enum ExtGraphImpl<'a> {
-    Vtk(VtkExtGraphType),
+    Vtk(VtkExtGraphType<'a>),
     Manifold(ManifoldExtGraphType<'a>)
 }
 
@@ -108,11 +115,12 @@ struct ExtGraph<'a> {
     graph: RefCell<Graph>,
     cache: RefCell<HashMap<usize, CriticalPointType>>,
     rng: RefCell<ThreadRng>,
-    vertices: RefCell<Vec<Vec<f64>>>
+    vertices: RefCell<Vec<Vec<f64>>>,
+    is_max_graph: bool
 }
 
 impl<'a> ExtGraph<'a> {
-    fn new_with_vtk(volume: VtkVolume) -> Self {
+    fn new_with_vtk(volume: &'a VtkVolume, is_max_graph: bool) -> Self {
         let rng = rand::thread_rng();
         let neighbor_idx_set = Rc::new(Self::generate_neighbor_idx_set(&volume));
         ExtGraph {
@@ -125,11 +133,12 @@ impl<'a> ExtGraph<'a> {
             graph: RefCell::new(Graph::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng),
-            vertices: RefCell::new(Vec::new())
+            vertices: RefCell::new(Vec::new()),
+            is_max_graph
         }
     }
 
-    fn new_with_manifold(volume: &'a Manifold, is_ref_mode: bool) -> Self {
+    fn new_with_manifold(volume: &'a Manifold, is_ref_mode: bool, is_max_graph: bool) -> Self {
         let rng = rand::thread_rng();
         let nn = if !is_ref_mode {
             let mut nn = NN::new();
@@ -150,34 +159,40 @@ impl<'a> ExtGraph<'a> {
             graph: RefCell::new(Graph::new()),
             cache: RefCell::new(HashMap::new()),
             rng: RefCell::new(rng),
-            vertices: RefCell::new(Vec::new())
+            vertices: RefCell::new(Vec::new()),
+            is_max_graph
         }
     }
 
+    fn is_upper_or_lower_link(&self, neighbor: f64, cur: f64, is_ref_mode: bool) -> bool {
+        // A basic implementation of simulation of simplicity
+        (self.is_max_graph && neighbor > cur) || (!self.is_max_graph && neighbor < cur) ||  
+        (neighbor == cur && self.rng.borrow_mut().gen_bool(SIMPLICITY_RANDOMNESS) && !is_ref_mode)
+    }
+
     fn classify_point(&self, cur: &Vertex, is_ref_mode: bool) {
-        let mut upper_link: HashMap<usize, Vec<Vertex>> = HashMap::new();
+        let mut link: HashMap<usize, Vec<Vertex>> = HashMap::new();
     
         let fv = cur.fn_val;
         
-        let mut highest_vertex_val = fv;
-        let mut highest_vertex_id = None;
+        let mut extreme_vertex_val = fv;
+        let mut extreme_vertex_id = None;
 
         let mut new_id = 0;
         for nv in cur.get_neighbors() {
             let fnv = nv.fn_val; 
             
-            // We only care about the upper link
-            // A basic implementation of simulation of simplicity
-            if fnv > fv || (fnv == fv && self.rng.borrow_mut().gen_bool(SIMPLICITY_RANDOMNESS) && !is_ref_mode) {
+            if self.is_upper_or_lower_link(fnv, fv, is_ref_mode) {
                 // Keep track of the highest neighbor
-                if fnv > highest_vertex_val {
-                    highest_vertex_val = fnv;
-                    highest_vertex_id = Some(nv.id);
+                if (self.is_max_graph && fnv > extreme_vertex_val) || 
+                (!self.is_max_graph && fnv < extreme_vertex_val) {
+                    extreme_vertex_val = fnv;
+                    extreme_vertex_id = Some(nv.id);
                 }
 
                 // Find which component in the upper link this vertex belongs to and insert it there
                 let mut found = vec![];
-                for (comp_id, vertices) in &upper_link {
+                for (comp_id, vertices) in &link {
                     for vert in vertices {
                         if vert.is_neighbor(&nv) {
                             found.push(*comp_id);
@@ -188,30 +203,37 @@ impl<'a> ExtGraph<'a> {
 
                 // If no such component, create new one
                 if found.len() == 0 {
-                    upper_link.insert(new_id, vec![nv]);
+                    link.insert(new_id, vec![nv]);
                     new_id += 1; 
                 }
                 else {
-                    let mut first_comp = upper_link.remove(&found[0]).unwrap();
+                    let mut first_comp = link.remove(&found[0]).unwrap();
                     for comp in found.iter().skip(1) {
-                        first_comp.extend(upper_link.remove(&comp).unwrap())
+                        first_comp.extend(link.remove(&comp).unwrap())
                     }
                     first_comp.push(nv);
-                    upper_link.insert(found[0], first_comp);
+                    link.insert(found[0], first_comp);
                 }
             }
         }
 
         let mut color_code = SADDLE;
-        let pt_type = if upper_link.len() >= 2 {
+        let pt_type = if link.len() >= 2 {
             // Find all the highest vertices from each upper link component
             let mut vertices = vec![];
-            for (_, comp_vert) in &upper_link {
-                let mut fn_val = -std::f64::INFINITY;
+            for (_, comp_vert) in &link {
+                let mut fn_val = if self.is_max_graph {
+                    -std::f64::INFINITY
+                }
+                else {
+                    std::f64::INFINITY
+                };
+
                 let mut chosen_vertex = &comp_vert[0];
                 for vert in comp_vert {
                     let cur_val = vert.fn_val;
-                    if fn_val < cur_val {
+                    if (self.is_max_graph && fn_val < cur_val) ||
+                    (!self.is_max_graph && fn_val > cur_val) {
                         fn_val = cur_val;
                         chosen_vertex = vert;
                     }
@@ -220,12 +242,12 @@ impl<'a> ExtGraph<'a> {
             } 
             CriticalPointType::Saddle(vertices)
         } 
-        else if upper_link.len() == 0 {
+        else if link.len() == 0 {
             color_code = MAXIMA;
             CriticalPointType::Maxima
         }   
         else {
-           CriticalPointType::Other(highest_vertex_id) 
+           CriticalPointType::Other(extreme_vertex_id) 
         };
 
         // Include d-1 saddles and maxima in the graph
@@ -494,32 +516,46 @@ fn get_critical_points(graph: &Graph) -> [usize; 2] {
     [maxima, saddles]    
 }
 
-fn process_vtk_file(path: &str) -> Result<FinalResult, String> {
-    let volume = read_vtk(path)?;
+fn process_vtk_file(path: Option<&str>) -> Result<FinalResult, String> {
+    if path.is_some() {
+        let volume = read_vtk(path.unwrap())?;
+        LAST_GRAPH.lock().unwrap().info = ProcessType::Vtk(volume);
+    }
     
+    let mut guard = LAST_GRAPH.lock().unwrap();
+    let is_max_graph = IS_MAX_GRAPH.load(Ordering::Relaxed); 
+    let volume = match &guard.info {
+        ProcessType::Vtk(vtk) => {
+            vtk
+        },
+        _ => {
+            panic!("Critical error! process_man_file called with VTK type!");
+        }
+    };
+
     println!("VTK contents:\nSpacing:{:?}\nDimensions:{:?}\nFirst 3 points: {} {} {}",
             volume.spacing, volume.dims, volume.data[0], volume.data[1], volume.data[2]);
 
     let total_points = volume.data.len();
-    let mut graph = ExtGraph::new_with_vtk(volume);
+    let mut graph = ExtGraph::new_with_vtk(volume, is_max_graph);
     
     let start = Instant::now();
     graph.compute();
     let time = start.elapsed().as_secs_f64() * 1000.0;
 
     let [total_maxima, total_saddles] = get_critical_points(&graph.graph.borrow());
-    println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
+    println!("There are total: {} points with {} maxima/minima and {} saddle(s)!", total_points, total_maxima, total_saddles);
 
     let res = FinalResult {
-        graph: graph.graph.into_inner(),
+        graph: graph.graph.borrow().clone(),
         time,
         memory: 0,
         accuracy: 100.0,
         f1score: 100.0,
         is_vtk: true
     };
-
-    *LAST_GRAPH.lock().unwrap() = GraphInfo::new();
+    
+    guard.graph_real = graph.graph.into_inner();
 
     Ok(res)
 }
@@ -527,18 +563,27 @@ fn process_vtk_file(path: &str) -> Result<FinalResult, String> {
 fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
     if path.is_some() {
         let man = read_manifold(path.unwrap())?;
-        LAST_GRAPH.lock().unwrap().manifold = man;
+        LAST_GRAPH.lock().unwrap().info = ProcessType::Manifold(man);
     }
 
     let mut guard = LAST_GRAPH.lock().unwrap();
-    let volume = &guard.manifold;
+    let volume = match &guard.info {
+        ProcessType::Manifold(man) => {
+            man
+        },
+        _ => {
+            panic!("Critical error! process_man_file called with VTK type!");
+        }
+    };
+
+    let is_max_graph = IS_MAX_GRAPH.load(Ordering::Relaxed); 
 
     let total_points = volume.vertices.len();
-    let mut graph_ref = ExtGraph::new_with_manifold(volume, true);
+    let mut graph_ref = ExtGraph::new_with_manifold(volume, true, is_max_graph);
     graph_ref.compute();
 
     let start = Instant::now();
-    let mut graph_real = ExtGraph::new_with_manifold(volume, false);
+    let mut graph_real = ExtGraph::new_with_manifold(volume, false, is_max_graph);
     graph_real.compute();
 
     let time = start.elapsed().as_secs_f64() * 1000.0;
@@ -581,7 +626,7 @@ fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
 pub async fn process_file_async(path: String) -> Result<FinalResult, String> {
     tokio::task::spawn_blocking(move || {
         if path.ends_with(".vtk") {
-            process_vtk_file(&path)
+            process_vtk_file(Some(&path))
         }
         else {
             process_man_file(Some(&path))
@@ -606,13 +651,19 @@ pub fn retrieve_last_graph() -> Graph {
 #[tauri::command]
 pub async fn recompute_graph() -> Result<FinalResult, String> {
     tokio::task::spawn_blocking(move || {
-        process_man_file(None)
+        if matches!(LAST_GRAPH.lock().unwrap().info, ProcessType::Vtk(_)) {
+            process_vtk_file(None)
+        }
+        else {
+            process_man_file(None)
+        }
     })
     .await.expect("Unexpected tokio error!!")
 }
 
 #[tauri::command]
-pub fn set_graph_mode(show_true_graph: bool) {
+pub fn set_graph_mode(show_true_graph: bool, is_max_graph: bool) {
     RETRIEVE_REF_GRAPH.store(show_true_graph, Ordering::Relaxed);
+    IS_MAX_GRAPH.store(is_max_graph, Ordering::Relaxed);
 }
 

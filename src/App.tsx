@@ -10,6 +10,8 @@ import plus_img from './assets/plus.png';
 import minus_img from './assets/minus.png';
 import up_img from './assets/up.png';
 import down_img from './assets/down.png';
+import max_img from './assets/max.png';
+import min_img from './assets/min.png';
 import ForceGraph3D from "react-force-graph-3d";
 
 export default function App() {
@@ -27,9 +29,13 @@ export default function App() {
   const [disabled, setDisabled] = useState<boolean>(true);
   const [extImg, setExtImg] = useState<string>(show_img);
   const [K, setK] = useState<number>(10);
-  const [beta, setBeta] = useState<number>(0.4);
+  const [beta, setBeta] = useState<number>(0.1);
+  const [isMaximum, setIsMaximum] = useState<boolean>(true);
+  const [maxDisabled, setMaxDisabled] = useState<boolean>(true);
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const stepK = 50;
+  const stepBeta = 0.1;
   
   // Watch the container for size changes
   useEffect(() => {
@@ -88,6 +94,7 @@ export default function App() {
         f1score: result.f1score
       })
       setDisabled(result.is_vtk);
+      setMaxDisabled(false);
     }
     catch (err) {
       console.error(err);
@@ -98,11 +105,11 @@ export default function App() {
     if (!isValidClick()) return;
 
     if (extImg == show_img) {
-      await invoke("set_graph_mode", {showTrueGraph: true});
+      await invoke("set_graph_mode", {showTrueGraph: true, isMaxGraph: isMaximum});
       setExtImg(hide_img);
     }
     else {
-      await invoke("set_graph_mode", {showTrueGraph: false});
+      await invoke("set_graph_mode", {showTrueGraph: false, isMaxGraph: isMaximum});
       setExtImg(show_img);
     }
 
@@ -139,34 +146,47 @@ export default function App() {
   const handleIncrement = async () => {
     if (!isValidClick) return;
     if (K < 500) {
-      await handleIncDecCommon(K + 50, beta);
-      setK(K + 50);
+      await handleIncDecCommon(K + stepK, beta);
+      setK(K + stepK);
     }
   };
 
   const handleDecrement = async () => {
     if (!isValidClick) return;
     if (K > 10) {
-      await handleIncDecCommon(K - 50, beta);
-      setK(K - 50);
+      await handleIncDecCommon(K - stepK, beta);
+      setK(K - stepK);
     }
   };
 
   const handleBetaIncrement = async () => {
     if (!isValidClick) return;
     if (beta < 1) {
-      await handleIncDecCommon(K, beta + 0.1);
-      setBeta(beta + 0.1);
+      await handleIncDecCommon(K, beta + stepBeta);
+      setBeta(beta + stepBeta);
     }
   };
 
   const handleBetaDecrement = async () => {
     if (!isValidClick) return;
     if (beta > 0.1) {
-      await handleIncDecCommon(K, beta - 0.1);
-      setBeta(beta - 0.1);
+      await handleIncDecCommon(K, beta - stepBeta);
+      setBeta(beta - stepBeta);
     }
   };
+
+  // Switch to max/min graph
+  const handleGraphMode = async () => {
+    if (!isValidClick) return;
+    try {
+      await invoke("set_graph_mode", {showTrueGraph: extImg == hide_img, isMaxGraph: !isMaximum})
+      await handleIncDecCommon(K, beta); 
+      setIsMaximum(!isMaximum);
+    }
+    catch (err) {
+      console.error(err);
+    }
+  }
 
   return (
     <div className="main-container">
@@ -176,6 +196,9 @@ export default function App() {
         </button>
         <button onClick={handleRecenter} title="Reset camera">
           <img src={reset_img} alt="Recenter"></img>
+        </button>
+        <button onClick={handleGraphMode} disabled={maxDisabled} title="Toggle max/min graph">
+          <img src={isMaximum ? max_img : min_img} alt="Toggle max/min mode"></img>
         </button>
         <button onClick={handleGraphToggle} disabled={disabled} title="Toggle true extremum graph">
           <img src={extImg} alt="Show true extremum graph"></img>
@@ -211,11 +234,12 @@ export default function App() {
               height={dimensions.height}
               graphData={formattedGraphData}
               nodeLabel={node => node.fnVal.toString()}
-              nodeColor={node => {if (node.color == 0) return "red"; else return "blue";}}
+              nodeColor={node => {if (node.color == 0) return (isMaximum ? "red" : "green") ; else return "blue";}}
             />
           )}
           <div className="overlay-text">
             <center>Stats</center>
+            Graph type: {isMaximum ? "Maximum" : "Minimum"}<br/>
             KNN: {K}<br/>
             Beta: {beta.toFixed(1)} (Using refined ERG)<br/>
             Time: {fetchTimeFormattedString(stats.time)}<br/>

@@ -1,6 +1,6 @@
 use ndarray::{ArrayView1, Array2};
 use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, distance::L2Dist};
-use std::{collections::HashSet, rc::Rc, sync::Mutex};
+use std::{collections::HashSet, rc::Rc, sync::{Mutex, atomic::AtomicUsize}};
 use rayon::prelude::*;
 use crate::{manifold::*, vtk::VtkVolume};
 
@@ -12,12 +12,12 @@ struct KnnConfig {
 
 static KNN_CONFIG: Mutex<KnnConfig> = Mutex::new(KnnConfig {
     k: 10,
-    beta: 0.4
+    beta: 0.1
 });
 
-struct VtkVertexInfo {
+struct VtkVertexInfo<'a> {
     iv: Vec<usize>,
-    vtk_volume: Rc<VtkVolume>,
+    vtk_volume: Rc<&'a VtkVolume>,
     neighbor_offset: Rc<Vec<Vec<i8>>>
 } 
 
@@ -27,7 +27,7 @@ struct ManifoldVertexInfo<'a> {
 } 
 
 enum VertexType<'a> {
-    Vtk(VtkVertexInfo),
+    Vtk(VtkVertexInfo<'a>),
     Manifold(ManifoldVertexInfo<'a>)
 }
 
@@ -51,7 +51,7 @@ impl<'a> Vertex<'a> {
 
     pub fn create_vtk_vertex(
         iv: &Vec<usize>, 
-        vtk_volume: Rc<VtkVolume>,
+        vtk_volume: Rc<&'a VtkVolume>,
         neighbor_offset: Rc<Vec<Vec<i8>>>
     ) -> Self {
         let id = Self::compute_id(&iv, &vtk_volume.dims);
@@ -207,6 +207,7 @@ impl NN {
             .unwrap();
 
         // Compute the neighborhood information for each vertex in parallel
+        let max_neighbors = AtomicUsize::new(0);
         let neighbors: Vec<HashSet<usize>> = (0..n)
             .into_par_iter()
             .map(|id| {
@@ -222,6 +223,7 @@ impl NN {
 
                 let pruned = Self::r_erg(&volume.vertices, id, &nbrs, config.beta);
 
+                max_neighbors.fetch_max(pruned.len(), std::sync::atomic::Ordering::Relaxed);
                 let mut set = HashSet::new();
                 pruned.iter().for_each(|idx| {
                     set.insert(*idx);
@@ -231,6 +233,7 @@ impl NN {
             })
             .collect();
 
+        println!("Max neighbors found {}", max_neighbors.load(std::sync::atomic::Ordering::Relaxed));
         self.neighbor_info.neighbors = neighbors;
     }
 
@@ -254,23 +257,23 @@ impl NN {
 
         let mut pruned = vec![neighbors[0]];
         let cur_pt =  &vertices[cur_idx];
+        let mut distances = vec![Self::l2(&vertices[neighbors[0]], cur_pt)];
         if beta < 1.0 {
             let r0 = 1.0 / (beta * 2.0);
-            let mut num_prev = 1;
             for &neighbor in neighbors.iter().skip(1) {
                 let nv = &vertices[neighbor];
                 let kd = Self::l2(cur_pt, nv);
+                distances.push(kd);
                 let r = kd * r0;
 
                 // Get the midpoint between p and q
                 let m: Vec<f64> = cur_pt.iter().zip(nv).map(|(a, b)| (a + b) / 2.0).collect(); 
                 let mut flag = true;
 
-                // In refined ERG, we go through all the previous processed vertices
-                // regardless of it being accepted or not
-                for &prev in &pruned {
+                // In refined ERG, we go through only the previously accepte neighbors
+                for (id, &prev) in pruned.iter().enumerate() {
                     let pt = &vertices[prev];
-                    let pt_dist = Self::l2(cur_pt, pt);
+                    let pt_dist = distances[id];
 
                     let c = Self::l2(pt, nv);
                     
@@ -288,9 +291,11 @@ impl NN {
                 if flag { 
                     pruned.push(neighbor); 
                 }
-
-                num_prev += 1;
             }
+        }
+        else {
+            // Disable beta pruning test
+            pruned = neighbors.clone();
         }
 
         pruned
