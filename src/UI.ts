@@ -86,7 +86,12 @@ export function fetchMemoryFormattedString(memory: number) : string {
 export function fetchTimeFormattedString(time: number) : string {
     let newTime = time;
     let suffix = "ms";
-    if (time >= 1000) {
+    
+    if (time >= 60 * 1000) {
+        newTime = time / 1000 / 60;
+        suffix = "min";
+    }
+    else if (time >= 1000) {
         newTime = time / 1000;
         suffix = "s"; 
     }

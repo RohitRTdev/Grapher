@@ -14,7 +14,7 @@ pub fn run() {
             graph::retrieve_last_graph,
             graph::set_graph_mode,
             graph::recompute_graph,
-            vertex::set_k
+            vertex::set_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

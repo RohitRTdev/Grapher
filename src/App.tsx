@@ -8,6 +8,8 @@ import show_img from './assets/show.png';
 import hide_img from './assets/hide.png';
 import plus_img from './assets/plus.png';
 import minus_img from './assets/minus.png';
+import up_img from './assets/up.png';
+import down_img from './assets/down.png';
 import ForceGraph3D from "react-force-graph-3d";
 
 export default function App() {
@@ -25,6 +27,7 @@ export default function App() {
   const [disabled, setDisabled] = useState<boolean>(true);
   const [extImg, setExtImg] = useState<string>(show_img);
   const [K, setK] = useState<number>(10);
+  const [beta, setBeta] = useState<number>(0.4);
   const graphRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   
@@ -112,9 +115,9 @@ export default function App() {
     }
   };
 
-  const handleIncDecCommon = async (new_k: number) => {
+  const handleIncDecCommon = async (new_k: number, new_beta: number) => {
     try {
-      await invoke("set_k", {k: new_k});
+      await invoke("set_config", {k: new_k, beta: new_beta});
       setLoading(true);
       let result = await invoke<FinalResult>("recompute_graph");
       setLoading(false);
@@ -135,20 +138,35 @@ export default function App() {
 
   const handleIncrement = async () => {
     if (!isValidClick) return;
-    if (K < 100) {
-      await handleIncDecCommon(K + 10);
-      setK(K + 10);
+    if (K < 500) {
+      await handleIncDecCommon(K + 50, beta);
+      setK(K + 50);
     }
   };
 
   const handleDecrement = async () => {
     if (!isValidClick) return;
     if (K > 10) {
-      await handleIncDecCommon(K - 10);
-      setK(K - 10);
+      await handleIncDecCommon(K - 50, beta);
+      setK(K - 50);
     }
   };
 
+  const handleBetaIncrement = async () => {
+    if (!isValidClick) return;
+    if (beta < 1) {
+      await handleIncDecCommon(K, beta + 0.1);
+      setBeta(beta + 0.1);
+    }
+  };
+
+  const handleBetaDecrement = async () => {
+    if (!isValidClick) return;
+    if (beta > 0.1) {
+      await handleIncDecCommon(K, beta - 0.1);
+      setBeta(beta - 0.1);
+    }
+  };
 
   return (
     <div className="main-container">
@@ -162,11 +180,17 @@ export default function App() {
         <button onClick={handleGraphToggle} disabled={disabled} title="Toggle true extremum graph">
           <img src={extImg} alt="Show true extremum graph"></img>
         </button>
-        <button onClick={handleIncrement} disabled={disabled || K >= 100} title="Increment K">
+        <button onClick={handleIncrement} disabled={disabled || K >= 500} title="Increment K">
           <img src={plus_img}></img>
         </button>
         <button onClick={handleDecrement} disabled={disabled || K <= 10} title="Decrement K">
           <img src={minus_img}></img>
+        </button>
+        <button onClick={handleBetaIncrement} disabled={disabled || beta.toFixed(2).startsWith("1")} title="Increment beta">
+          <img src={up_img}></img>
+        </button>
+        <button onClick={handleBetaDecrement} disabled={disabled || beta.toString().startsWith("0.1")} title="Decrement beta">
+          <img src={down_img}></img>
         </button>
       </div>
 
@@ -193,6 +217,7 @@ export default function App() {
           <div className="overlay-text">
             <center>Stats</center>
             KNN: {K}<br/>
+            Beta: {beta.toFixed(1)} (Using refined ERG)<br/>
             Time: {fetchTimeFormattedString(stats.time)}<br/>
             Memory: {fetchMemoryFormattedString(stats.memory)}<br/>
             Accuracy: {stats.accuracy.toFixed(2)}%<br/>

@@ -483,7 +483,7 @@ fn get_critical_points(graph: &Graph) -> [usize; 2] {
     let mut maxima = 0;
     let mut saddles = 0;
     for pt in &graph.nodes {
-        if pt.color_code == 0 {
+        if pt.color_code == MAXIMA {
             maxima += 1;
         }
         else {
@@ -537,9 +537,8 @@ fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
     let mut graph_ref = ExtGraph::new_with_manifold(volume, true);
     graph_ref.compute();
 
-    let mut graph_real = ExtGraph::new_with_manifold(volume, false);
-
     let start = Instant::now();
+    let mut graph_real = ExtGraph::new_with_manifold(volume, false);
     graph_real.compute();
 
     let time = start.elapsed().as_secs_f64() * 1000.0;

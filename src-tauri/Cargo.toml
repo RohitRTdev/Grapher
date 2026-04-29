@@ -24,5 +24,6 @@ rand = "*"
 linfa-nn = "0.8"
 ndarray = "0.16"
 fast-umap  = "1.6.0"
-burn       = { version = "0.20.1", features = ["wgpu", "autodiff", "autotune"] }
-cubecl     = { version = "0.9.0",  features = ["wgpu"] }
+burn = { version = "0.20.1", features = ["wgpu", "autodiff", "autotune"] }
+cubecl = { version = "0.9.0",  features = ["wgpu"] }
+rayon = "*"

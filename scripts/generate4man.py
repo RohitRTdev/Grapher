@@ -6,7 +6,7 @@ import umap
 def embedding(u, v, w, t):
     x1 = np.cos(u)
     x2 = np.sin(u)
-    x3 = np.cos(v + w)
+    x3 = np.sin(v + w)
     x4 = np.sin(v + t)
     x5 = np.sin(w + t)
     return [x1, x2, x3, x4, x5]
@@ -89,7 +89,7 @@ if __name__ == "__main__":
         vertices=vertices,
         values=values,
         edges=edges,
-        file_path="manifold4d_in_5d.man"
+        file_path="manifold4d_in_5d_new.man"
     )
 
     print(f"Vertices: {len(vertices)}, Edges: {len(edges)}")

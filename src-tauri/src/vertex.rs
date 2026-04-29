@@ -1,9 +1,19 @@
 use ndarray::{ArrayView1, Array2};
 use linfa_nn::{CommonNearestNeighbour, NearestNeighbour, distance::L2Dist};
-use std::{collections::HashSet, rc::Rc, sync::atomic::{AtomicUsize, Ordering}};
+use std::{collections::HashSet, rc::Rc, sync::Mutex};
+use rayon::prelude::*;
 use crate::{manifold::*, vtk::VtkVolume};
 
-static KNN: AtomicUsize = AtomicUsize::new(10);
+#[derive(Clone, Copy)]
+struct KnnConfig {
+    k: usize,
+    beta: f64
+}
+
+static KNN_CONFIG: Mutex<KnnConfig> = Mutex::new(KnnConfig {
+    k: 10,
+    beta: 0.4
+});
 
 struct VtkVertexInfo {
     iv: Vec<usize>,
@@ -183,41 +193,114 @@ impl NN {
         }
     }
 
+
     pub fn build_neighborhood(&mut self, volume: &Manifold) {
         let n = volume.vertices.len();
         let d = volume.embedding_dim;
-        let k = KNN.load(Ordering::Relaxed);
-        self.neighbor_info.neighbors = vec![HashSet::new(); n];
+        let config = *KNN_CONFIG.lock().unwrap();
 
         let flat: Vec<f64> = volume.vertices.iter().flatten().cloned().collect();
-
         let data = Array2::from_shape_vec((n, d), flat).unwrap(); 
         
         let kdtree = CommonNearestNeighbour::KdTree
             .from_batch(&data, L2Dist)
             .unwrap();
 
-        // Build the entire adjacency list at init
-        for id in 0..volume.vertices.len() {
-            let point = &volume.vertices[id];
-            let query = ArrayView1::from(point.as_slice());
-            
-            // Use KNN to find the neighbors when we don't have the neighborhood information
-            let result = kdtree.k_nearest(query, k).unwrap();
-            
-            result.iter()
-            .filter(|(_, idx)| {
-                // Exclude providing the same element as its neighbor
-                id != *idx
+        // Compute the neighborhood information for each vertex in parallel
+        let neighbors: Vec<HashSet<usize>> = (0..n)
+            .into_par_iter()
+            .map(|id| {
+                let point = &volume.vertices[id];
+                let query = ArrayView1::from(point.as_slice());
+                
+                let result = kdtree.k_nearest(query, config.k).unwrap();
+                
+                let nbrs: Vec<usize> = result.iter()
+                    .filter(|(_, idx)| id != *idx)
+                    .map(|(_, idx)| *idx)
+                    .collect();
+
+                let pruned = Self::r_erg(&volume.vertices, id, &nbrs, config.beta);
+
+                let mut set = HashSet::new();
+                pruned.iter().for_each(|idx| {
+                    set.insert(*idx);
+                });
+
+                set
             })
-            .for_each(|(_, idx)| {
-                self.neighbor_info.neighbors[id].insert(*idx);
-            });
-        }
+            .collect();
+
+        self.neighbor_info.neighbors = neighbors;
     }
+
+    fn l2(a: &[f64], b: &[f64]) -> f64 {
+        a.iter().zip(b).map(|(x, y)| (x - y).powi(2)).sum::<f64>().sqrt()
+    }
+    
+    fn get_radius(a: f64, b: f64, c: f64) -> f64 {
+        let s = (a + b + c) / 2.0;
+        let area2 = s * (s - a) * (s - b) * (s - c);
+        if area2 <= 0.0 {
+            return f64::INFINITY;
+        }
+        a * b * c / (4.0 * area2.sqrt())
+    }
+    
+    fn r_erg(vertices: &Vec<Vec<f64>>, cur_idx: usize, neighbors: &Vec<usize>, beta: f64) -> Vec<usize> {
+        if neighbors.len() == 0 {
+            return vec![];
+        }
+
+        let mut pruned = vec![neighbors[0]];
+        let cur_pt =  &vertices[cur_idx];
+        if beta < 1.0 {
+            let r0 = 1.0 / (beta * 2.0);
+            let mut num_prev = 1;
+            for &neighbor in neighbors.iter().skip(1) {
+                let nv = &vertices[neighbor];
+                let kd = Self::l2(cur_pt, nv);
+                let r = kd * r0;
+
+                // Get the midpoint between p and q
+                let m: Vec<f64> = cur_pt.iter().zip(nv).map(|(a, b)| (a + b) / 2.0).collect(); 
+                let mut flag = true;
+
+                // In refined ERG, we go through all the previous processed vertices
+                // regardless of it being accepted or not
+                for &prev in &pruned {
+                    let pt = &vertices[prev];
+                    let pt_dist = Self::l2(cur_pt, pt);
+
+                    let c = Self::l2(pt, nv);
+                    
+                    if Self::l2(pt, &m) > kd / 2.0 { 
+                        continue; 
+                    }
+
+                    let rnbr = Self::get_radius(kd, pt_dist, c);
+                    if rnbr == f64::INFINITY || rnbr >= r { 
+                        flag = false;
+                        break;
+                    }
+                }
+                
+                if flag { 
+                    pruned.push(neighbor); 
+                }
+
+                num_prev += 1;
+            }
+        }
+
+        pruned
+    }
+
 }
 
 #[tauri::command]
-pub fn set_k(k: usize) {
-    KNN.store(k, Ordering::Relaxed);
+pub fn set_config(k: usize, beta: f64) {
+    *KNN_CONFIG.lock().unwrap() = KnnConfig {
+        k, beta
+    };
 }
