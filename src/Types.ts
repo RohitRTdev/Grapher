@@ -16,6 +16,7 @@ export type Stats = {
   time: number;
   memory: number;
   accuracy: number;
+  f1score: number;
 }
 
 export type Graph = {
@@ -28,6 +29,7 @@ export type FinalResult = {
   time: number;
   memory: number;
   accuracy: number;
+  f1score: number;
   is_vtk: boolean;
 };
 

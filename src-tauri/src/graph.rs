@@ -67,6 +67,7 @@ pub struct FinalResult {
     time: f64,
     memory: usize,
     accuracy: f64,
+    f1score: f64,
     is_vtk: bool
 }
 
@@ -514,6 +515,7 @@ fn process_vtk_file(path: &str) -> Result<FinalResult, String> {
         time,
         memory: 0,
         accuracy: 100.0,
+        f1score: 100.0,
         is_vtk: true
     };
 
@@ -549,6 +551,7 @@ fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
     let graph1 = graph_ref.graph.borrow().clone();
     let graph2= graph_real.graph.borrow().clone();
     let accuracy = get_accuracy(&graph1, &graph2);
+    let f1score = get_f1_score(&graph1, &graph2);
 
     let [total_maxima, total_saddles] = get_critical_points(&graph2);
     println!("There are total: {} points with {} maxima and {} saddle(s)!", total_points, total_maxima, total_saddles);
@@ -568,6 +571,7 @@ fn process_man_file(path: Option<&str>) -> Result<FinalResult, String> {
         time,
         memory,
         accuracy,
+        f1score,
         is_vtk: false
     };
 

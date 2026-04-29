@@ -17,7 +17,8 @@ export default function App() {
   const [stats, setStats] = useState<Stats>({
                               time: 0,
                               memory: 0,
-                              accuracy: 0
+                              accuracy: 0,
+                              f1score: 0
                             });
 
   
@@ -80,7 +81,8 @@ export default function App() {
       setStats({
         time: result.time, 
         memory: result.memory,
-        accuracy: result.accuracy
+        accuracy: result.accuracy,
+        f1score: result.f1score
       })
       setDisabled(result.is_vtk);
     }
@@ -122,7 +124,8 @@ export default function App() {
       setStats({
         time: result.time, 
         memory: result.memory,
-        accuracy: result.accuracy
+        accuracy: result.accuracy,
+        f1score: result.f1score
       })
     }
     catch (err) {
@@ -193,6 +196,7 @@ export default function App() {
             Time: {fetchTimeFormattedString(stats.time)}<br/>
             Memory: {fetchMemoryFormattedString(stats.memory)}<br/>
             Accuracy: {stats.accuracy.toFixed(2)}%<br/>
+            F1 score: {stats.f1score.toFixed(2)}%<br/>
           </div>
         </div>
       )}
