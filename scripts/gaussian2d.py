@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from manifold import generateManifold
-
+from plotGraph import plotGraph
 
 def multi_gaussian(x, y, centers, sigma):
     z = np.zeros_like(x)
@@ -73,30 +73,6 @@ def generate_gaussian_grid(n: int, extent: float = 2.0):
     return vertices, values, edges, X, Y, Z
 
 
-def plot_graph(X, Y, Z, vertices, edges):
-    fig = plt.figure()
-    ax_surface = fig.add_subplot(1, 2, 1, projection="3d")
-    ax_wireframe = fig.add_subplot(1, 2, 2, projection="3d")
-
-    ax_surface.plot_surface(X, Y, Z)
-    ax_surface.set_title("Surface plot")
-
-    for u, v in edges:
-        x = [vertices[u][0], vertices[v][0]]
-        y = [vertices[u][1], vertices[v][1]]
-        z = [vertices[u][2], vertices[v][2]]
-
-        ax_wireframe.plot(x, y, z, linewidth=0.5)
-
-    xs = [v[0] for v in vertices]
-    ys = [v[1] for v in vertices]
-    zs = [v[2] for v in vertices]
-
-    ax_wireframe.scatter(xs, ys, zs, s=5)
-
-    ax_wireframe.set_title("Manifold 1d skeleton")
-
-    plt.show()
 
 if __name__ == "__main__":
     n = 60
@@ -113,4 +89,4 @@ if __name__ == "__main__":
 
     print(f"Vertices: {len(vertices)}, Edges: {len(edges)}")
 
-    plot_graph(X, Y, Z, vertices, edges)
+    plotGraph(X, Y, Z, vertices, edges)

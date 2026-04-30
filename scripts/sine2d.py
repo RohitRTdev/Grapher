@@ -1,21 +1,16 @@
 import numpy as np
-import matplotlib.pyplot as plt
 from manifold import generateManifold
 from plotGraph import plotGraph
 
-def wave_function(x, y):
-    r2 = x**2 + y**2
-
-    # central bump + oscillations
-    return np.exp(-r2) * np.cos(3 * x) * np.sin(3 * y)
-
+def sine_function(x, y):
+    return np.sin(2*x) + np.sin(2*y)
 
 def generate_wave_grid(n: int, extent: float = 2.0):
     x = np.linspace(-extent, extent, n)
     y = np.linspace(-extent, extent, n)
     X, Y = np.meshgrid(x, y)
 
-    Z = wave_function(X, Y)
+    Z = sine_function(X, Y)
 
     vertices = []
     values = []
@@ -59,14 +54,14 @@ def generate_wave_grid(n: int, extent: float = 2.0):
 if __name__ == "__main__":
     n = 60
 
-    vertices, values, edges, X, Y, Z = generate_wave_grid(n)
+    vertices, values, edges, X, Y, Z = generate_wave_grid(n, np.pi)
 
     generateManifold(
         embedding_dim=3,
         vertices=vertices,
         values=values,
         edges=edges,
-        file_path="wave2d.man"
+        file_path="sine2d.man"
     )
 
     print(f"Vertices: {len(vertices)}, Edges: {len(edges)}")
