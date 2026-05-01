@@ -104,16 +104,16 @@ export default function App() {
   const handleGraphToggle = async () => {
     if (!isValidClick()) return;
 
-    if (extImg == show_img) {
-      await invoke("set_graph_mode", {showTrueGraph: true, isMaxGraph: isMaximum});
-      setExtImg(hide_img);
-    }
-    else {
-      await invoke("set_graph_mode", {showTrueGraph: false, isMaxGraph: isMaximum});
-      setExtImg(show_img);
-    }
-
     try {
+      if (extImg == show_img) {
+        await invoke("set_graph_mode", {showTrueGraph: true, isMaxGraph: isMaximum});
+        setExtImg(hide_img);
+      }
+      else {
+        await invoke("set_graph_mode", {showTrueGraph: false, isMaxGraph: isMaximum});
+        setExtImg(show_img);
+      }
+
       let result = await fetchLastGraph();
       setGraph(result);
     }
